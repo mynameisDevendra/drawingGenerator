@@ -139,7 +139,7 @@ def process_terminal_drawing(df, fs_config, footer_data, left_col_data, page_siz
 
 # --- STREAMLIT INTERFACE ---
 st.set_page_config(page_title="Railway Terminal Designer", layout="wide")
-st.title("🚉 Collapsible Custom Engineering Layout Generator")
+st.title("🚉 CTR Layout Generator")
 
 # --- SIDEBAR WITH COLLAPSIBLE SUBJECTS ---
 with st.sidebar:
