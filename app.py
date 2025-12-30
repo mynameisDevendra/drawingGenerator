@@ -6,6 +6,56 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 import re
 import io
 
+# --- LAYOUT CONSTANTS ---
+# Margins based on standard engineering drawing layouts
+MARGIN = 20
+
+def draw_page_template(c, width, height, page_size):
+    """
+    Draws the permanent peripheral boundary, title block, and right margin info.
+    Based on standard railway signaling drawing formats[cite: 1, 85, 100].
+    """
+    # 1. Outer Peripheral Boundary
+    c.setLineWidth(1.5)
+    c.rect(MARGIN, MARGIN, width - (2 * MARGIN), height - (2 * MARGIN))
+    
+    # 2. Bottom Title Block (Lowest Footer) 
+    # Height of footer is approx 60 points
+    footer_y = MARGIN + 60
+    c.line(MARGIN, footer_y, width - MARGIN, footer_y)
+    
+    # Vertical dividers for Title Block sections
+    # Prepared By | Checked | Approved | Location | Project Info | Sheet No
+    dividers = [width * 0.2, width * 0.45, width * 0.65, width * 0.85]
+    for x in dividers:
+        c.line(x, MARGIN, x, footer_y)
+    
+    # Text in Title Block [cite: 85, 86, 100]
+    c.setFont("Helvetica-Bold", 8)
+    c.drawString(MARGIN + 5, footer_y - 12, "PREPARED BY")
+    c.drawString(width * 0.2 + 5, footer_y - 12, "CHECKED")
+    c.drawString(width * 0.45 + 5, footer_y - 12, "APPROVED")
+    
+    c.setFont("Helvetica-Bold", 10)
+    c.drawCentredString(width * 0.55, MARGIN + 35, "SOUTH GOOTY")
+    c.drawCentredString(width * 0.55, MARGIN + 20, "CTR-1")
+    
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(width * 0.65 + 10, MARGIN + 40, "BAITARANI ROAD")
+    c.setFont("Helvetica", 8)
+    c.drawString(width * 0.65 + 10, MARGIN + 25, "SIP.ECoR.KUR.BTV.03")
+    
+    c.setFont("Helvetica-Bold", 10)
+    c.drawCentredString(width * 0.925, MARGIN + 25, "SH NO: 009")
+
+    # 3. Right Margin Information (Project Reference) [cite: 2, 88]
+    right_margin_x = width - 150
+    # Boundary for right margin info box
+    c.rect(MARGIN, height - 100, 160, 80) # Left side box in reference
+    c.setFont("Helvetica-Bold", 7)
+    c.drawString(MARGIN + 5, height - 35, "COMPLETION DRAWING")
+    c.drawString(MARGIN + 5, height - 55, "PCSTE'S REFERENCE NO.7132/24")
+
 # --- CORE DRAWING LOGIC ---
 
 def get_dynamic_font_size(text, font_name, max_width, start_size, min_size=5):
@@ -54,18 +104,21 @@ def extract_number(s):
 def process_terminal_drawing(df, header_fs, footer_fs, term_id_fs, row_id_fs, page_size_choice):
     buffer = io.BytesIO()
     
-    # Selection Arrangement for A3 or A4
     if page_size_choice == "A3":
         selected_size = landscape(A3)
-        # Increase spacing for A3
-        x_start, row_height, gap = 120, 220, 40 
+        x_start, row_height, gap = 180, 200, 40 
     else:
         selected_size = landscape(A4)
-        x_start, row_height, gap = 120, 180, 35
+        x_start, row_height, gap = 160, 160, 35
 
     c = canvas.Canvas(buffer, pagesize=selected_size)
     width, height = selected_size
-    y_current = height - 120
+    
+    # 1. DRAW PERMANENT PAGE TEMPLATE
+    draw_page_template(c, width, height, page_size_choice)
+    
+    # Starting vertical position (accounting for template)
+    y_current = height - 160
     
     # Cleaning and Sorting
     df = df.dropna(subset=['Terminal ID'])
@@ -80,6 +133,7 @@ def process_terminal_drawing(df, header_fs, footer_fs, term_id_fs, row_id_fs, pa
         rows[rid].append(item.to_dict())
 
     for rid, terminals in rows.items():
+        # Draw Row ID (A, B, C...) [cite: 1, 29, 49, 53, 101]
         c.setFont("Helvetica-Bold", row_id_fs)
         c.drawRightString(x_start - 35, y_current + 15, rid)
 
@@ -106,39 +160,33 @@ def process_terminal_drawing(df, header_fs, footer_fs, term_id_fs, row_id_fs, pa
 # --- STREAMLIT INTERFACE ---
 
 st.set_page_config(page_title="Railway Terminal Designer", layout="wide")
-st.title("🚉 Railway Terminal Drawing Automation")
+st.title("🚉 Professional Terminal Drawing Layout")
 
 with st.sidebar:
     st.header("Page Configuration")
-    # Selection Arrangement for Page Size
     page_size = st.selectbox("Select Page Size", ["A4", "A3"], index=0)
     
-    st.header("Font Settings (Points)")
-    h_fs = st.number_input("Header Font Size", value=10.0)
-    f_fs = st.number_input("Footer Font Size", value=9.0)
-    t_fs = st.number_input("Terminal ID Font Size", value=8.0)
-    r_fs = st.number_input("Row ID Font Size", value=16.0)
+    st.header("Font Settings")
+    h_fs = st.number_input("Header Font Size", value=9.0)
+    f_fs = st.number_input("Footer Font Size", value=8.0)
+    t_fs = st.number_input("Terminal ID Font Size", value=7.0)
+    r_fs = st.number_input("Row ID Font Size", value=14.0)
 
-st.subheader("Terminal Data")
-st.info("Edit the table below. Use the '+' button to add terminals. Identical Headers/Footers will be grouped.")
-
-# Example dataframe
+st.subheader("Drawing Data")
 df_input = pd.DataFrame([
-    {"Row ID": "A", "Header": "DID HHG", "Footer": "S-30 CTR1", "Terminal ID": "01"},
-    {"Row ID": "A", "Header": "DID HHG", "Footer": "S-30 CTR1", "Terminal ID": "02"}
+    {"Row ID": "A", "Header": "DID HHG (3RD)", "Footer": "101-30C TO LOC-89", "Terminal ID": "01"},
+    {"Row ID": "A", "Header": "DID HHG (3RD)", "Footer": "101-30C TO LOC-89", "Terminal ID": "02"}
 ])
 
 edited_df = st.data_editor(df_input, num_rows="dynamic", use_container_width=True)
 
-if st.button("🚀 Generate PDF Drawing"):
+if st.button("🚀 Generate Professional Drawing"):
     if not edited_df.empty:
         pdf_buffer = process_terminal_drawing(edited_df, h_fs, f_fs, t_fs, r_fs, page_size)
-        st.success(f"Drawing Generated for {page_size}!")
+        st.success(f"Professional Layout Generated for {page_size}!")
         st.download_button(
             label=f"⬇️ Download {page_size} PDF",
             data=pdf_buffer,
-            file_name=f"Terminal_Layout_{page_size}.pdf",
+            file_name=f"Signaling_Drawing_{page_size}.pdf",
             mime="application/pdf"
         )
-    else:
-        st.error("Please enter terminal data first.")
