@@ -7,50 +7,50 @@ import re
 import io
 
 # --- LAYOUT CONSTANTS ---
-PAGE_MARGIN = 20  # Distance from paper edge
-SAFETY_OFFSET = 42.5  # 1.5 cm distance from left margin line
+PAGE_MARGIN = 20  
+# SAFETY_OFFSET is the distance from the full-length left margin line
+SAFETY_OFFSET = 42.5  # 1.5 cm 
 
 def draw_page_template(c, width, height):
     """
-    Draws the full-length peripheral boundary and engineering title block.
+    Draws the full-length peripheral boundary and correctly partitioned 
+    left column and bottom title block.
     """
     c.setLineWidth(1.5)
-    # Full length peripheral boundary from top to bottom
+    # 1. Outer Peripheral Boundary (Full Page Frame) [cite: 1, 101]
     c.rect(PAGE_MARGIN, PAGE_MARGIN, width - (2 * PAGE_MARGIN), height - (2 * PAGE_MARGIN))
     
-    # Title Block Footer (60 pts high) [cite: 85, 100]
+    # 2. Bottom Title Block Line (Full Width) [cite: 101]
     footer_y = PAGE_MARGIN + 60
     c.line(PAGE_MARGIN, footer_y, width - PAGE_MARGIN, footer_y)
     
-    # Section Dividers [cite: 54, 89, 81]
+    # 3. Left Information Column (Full Vertical Line from Top to Footer) 
+    # This prevents the 'mini square' by extending the line down to the footer
+    info_box_width = 160
+    c.line(PAGE_MARGIN + info_box_width, footer_y, PAGE_MARGIN + info_box_width, height - PAGE_MARGIN)
+    
+    # 4. Horizontal Partition for the Information Box at Top Left 
+    info_box_height = 80
+    c.line(PAGE_MARGIN, height - PAGE_MARGIN - info_box_height, PAGE_MARGIN + info_box_width, height - PAGE_MARGIN - info_box_height)
+    
+    # Title Block Vertical Dividers [cite: 62, 85, 86, 100]
     dividers = [width * 0.2, width * 0.45, width * 0.65, width * 0.85]
     for x in dividers:
         c.line(x, PAGE_MARGIN, x, footer_y)
     
-    # Labels
+    # Text Labels in Information Box [cite: 1, 88]
+    c.setFont("Helvetica-Bold", 8)
+    c.drawString(PAGE_MARGIN + 5, height - PAGE_MARGIN - 20, "COMPLETION DRAWING")
+    c.setFont("Helvetica", 7)
+    c.drawString(PAGE_MARGIN + 5, height - PAGE_MARGIN - 40, "PCSTE'S REFERENCE NO.7132/24")
+
+    # Bottom Footer Labels [cite: 62, 85, 86, 100]
     c.setFont("Helvetica-Bold", 8)
     c.drawString(PAGE_MARGIN + 5, footer_y - 12, "PREPARED BY")
-    c.drawString(width * 0.2 + 5, footer_y - 12, "CHECKED")
-    c.drawString(width * 0.45 + 5, footer_y - 12, "APPROVED")
-    
-    # Center Info [cite: 85]
-    c.setFont("Helvetica-Bold", 10)
     c.drawCentredString(width * 0.55, PAGE_MARGIN + 35, "SOUTH GOOTY")
     c.drawCentredString(width * 0.55, PAGE_MARGIN + 20, "CTR-1")
-    
-    # Station Info [cite: 86, 87]
-    c.setFont("Helvetica-Bold", 11)
     c.drawString(width * 0.65 + 10, PAGE_MARGIN + 40, "BAITARANI ROAD")
-    c.setFont("Helvetica", 8)
-    c.drawString(width * 0.65 + 10, PAGE_MARGIN + 25, "SIP.ECoR.KUR.BTV.03")
     c.drawCentredString(width * 0.925, PAGE_MARGIN + 25, "SH NO: 009")
-
-    # Left Information Box [cite: 1, 52]
-    c.setLineWidth(1)
-    c.rect(PAGE_MARGIN, height - 100, 160, 80)
-    c.setFont("Helvetica-Bold", 7)
-    c.drawString(PAGE_MARGIN + 5, height - 35, "COMPLETION DRAWING")
-    c.drawString(PAGE_MARGIN + 5, height - 55, "PCSTE'S REFERENCE NO.7132/24")
 
 # --- CORE DRAWING LOGIC ---
 
@@ -63,7 +63,7 @@ def get_dynamic_font_size(text, font_name, max_width, start_size):
     return 5
 
 def draw_terminal(c, x, y, term_id, term_font_size):
-    """Draws vertical terminal with parallel lines and solid circles [cite: 2-7, 9]."""
+    """Vertical terminal with parallel lines and solid circles[cite: 4, 13]."""
     c.setLineWidth(1)
     c.line(x - 3, y, x - 3, y + 40) 
     c.line(x + 3, y, x + 3, y + 40) 
@@ -74,7 +74,7 @@ def draw_terminal(c, x, y, term_id, term_font_size):
     c.drawRightString(x - 8, y + 17, str(term_id).zfill(2)) 
 
 def draw_bracket_label(c, x1, x2, y, text, is_header, user_font_size):
-    """Draws grouping brackets with auto-scaled text [cite: 2-8]."""
+    """Grouping brackets with auto-scaled text[cite: 4, 14]."""
     c.setLineWidth(0.8)
     c.line(x1, y, x2, y)
     mid = (x1 + x2) / 2
@@ -96,13 +96,13 @@ def process_terminal_drawing(df, header_fs, footer_fs, term_id_fs, row_id_fs, pa
     
     draw_page_template(c, width, height)
     
-    # Logic for 1.5cm offset from the leftmost margin line
-    x_start = PAGE_MARGIN + SAFETY_OFFSET + 40 # Total horizontal start
+    # 1.5 cm offset from the full vertical info column line 
+    info_column_x = PAGE_MARGIN + 160
+    x_start = info_column_x + SAFETY_OFFSET + 20 
     y_current = height - 150
     gap = 40 if page_size_choice == "A3" else 35
     row_height = 180
     
-    # Sorting and Drawing
     df = df.dropna(subset=['Terminal ID'])
     df['sort_key'] = df['Terminal ID'].apply(lambda s: int(re.findall(r'\d+', str(s))[0]) if re.findall(r'\d+', str(s)) else 0)
     df = df.sort_values(by=['Row ID', 'sort_key'])
@@ -110,14 +110,13 @@ def process_terminal_drawing(df, header_fs, footer_fs, term_id_fs, row_id_fs, pa
     rows = df.groupby('Row ID')
     for rid, group in rows:
         terminals = group.to_dict('records')
-        # Row Identifier A, B, C... [cite: 24, 29, 49, 53, 101]
+        # Row Identifier A, B, C... [cite: 29, 49, 53]
         c.setFont("Helvetica-Bold", row_id_fs)
         c.drawRightString(x_start - 35, y_current + 15, rid)
 
         for idx, term in enumerate(terminals):
             draw_terminal(c, x_start + (idx * gap), y_current, term['Terminal ID'], term_id_fs)
 
-        # Header/Footer Grouping logic [cite: 4-12, 14-23]
         for type_key, is_h, y_off in [('Header', True, 53.5), ('Footer', False, -13.5)]:
             i = 0
             while i < len(terminals):
@@ -136,7 +135,7 @@ def process_terminal_drawing(df, header_fs, footer_fs, term_id_fs, row_id_fs, pa
 
 # --- STREAMLIT INTERFACE ---
 st.set_page_config(page_title="Railway Terminal Designer", layout="wide")
-st.title("🚉 Professional Terminal Layout (1.5cm Margin Offset)")
+st.title("🚉 Full-Length Column Layout")
 
 with st.sidebar:
     page_size = st.selectbox("Page Size", ["A4", "A3"])
@@ -153,4 +152,4 @@ edited_df = st.data_editor(df_input, num_rows="dynamic", use_container_width=Tru
 
 if st.button("🚀 Generate PDF"):
     pdf_buffer = process_terminal_drawing(edited_df, h_fs, f_fs, t_fs, r_fs, page_size)
-    st.download_button("⬇️ Download PDF", data=pdf_buffer, file_name="Signaling_Drawing.pdf", mime="application/pdf")
+    st.download_button("⬇️ Download PDF", data=pdf_buffer, file_name="Signaling_Drawing_Full_Column.pdf", mime="application/pdf")
