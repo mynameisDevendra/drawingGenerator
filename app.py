@@ -15,51 +15,47 @@ def draw_page_template(c, width, height, footer_data, left_col_data):
     Draws the full-length left column and 6-box footer with user-defined text.
     """
     c.setLineWidth(1.5)
-    # 1. Outer Peripheral Boundary
+    # 1. Outer Peripheral Boundary [cite: 1]
     c.rect(PAGE_MARGIN, PAGE_MARGIN, width - (2 * PAGE_MARGIN), height - (2 * PAGE_MARGIN))
     
-    # 2. Bottom Title Block Line
+    # 2. Bottom Title Block Line [cite: 1]
     footer_y = PAGE_MARGIN + 60
     c.line(PAGE_MARGIN, footer_y, width - PAGE_MARGIN, footer_y)
     
-    # 3. Left Column (Width matched to 1st footer box)
-    # Total width of footer = width - 2*PAGE_MARGIN. Divided by 6 boxes.
+    # 3. Left Column (Width matched to 1st footer box) [cite: 1]
     box_width = (width - (2 * PAGE_MARGIN)) / 6
     info_column_x = PAGE_MARGIN + box_width 
     c.line(info_column_x, PAGE_MARGIN, info_column_x, height - PAGE_MARGIN)
     
-    # 4. Left Information Box (Top Left Partition)
+    # 4. Left Information Box (Top Left Partition) [cite: 1]
     info_box_height = 80
     c.line(PAGE_MARGIN, height - PAGE_MARGIN - info_box_height, info_column_x, height - PAGE_MARGIN - info_box_height)
     
-    # 5. Draw 6 Footer Boxes
+    # 5. Draw 6 Footer Boxes [cite: 1]
     for i in range(1, 6):
         x_pos = PAGE_MARGIN + (i * box_width)
         c.line(x_pos, PAGE_MARGIN, x_pos, footer_y)
     
     # --- FILLING EDITABLE TEXT ---
     
-    # Left Column Text [cite: 1, 88]
+    # Left Column Text [cite: 1]
     c.setFont("Helvetica-Bold", 7)
     c.drawString(PAGE_MARGIN + 3, height - PAGE_MARGIN - 15, left_col_data['line1'].upper())
     c.setFont("Helvetica", 6)
     c.drawString(PAGE_MARGIN + 3, height - PAGE_MARGIN - 30, left_col_data['line2'].upper())
     c.drawString(PAGE_MARGIN + 3, height - PAGE_MARGIN - 40, left_col_data['line3'].upper())
 
-    # Footer Boxes Text 
+    # Footer Boxes Text [cite: 1, 85, 86]
     c.setFont("Helvetica-Bold", 7)
     labels = ["box1", "box2", "box3", "box4", "box5", "box6"]
     for i, label in enumerate(labels):
         x_center = PAGE_MARGIN + (i * box_width) + (box_width / 2)
         text = footer_data[label]
-        # Split text by newline if user entered multiple lines
         lines = text.split('\n')
         for j, line in enumerate(lines):
             c.drawCentredString(x_center, footer_y - 15 - (j * 10), line.upper())
 
     return info_column_x
-
-# --- CORE LOGIC (Terminal Drawing & Sequencing) ---
 
 def get_dynamic_font_size(text, font_name, max_width, start_size):
     size = float(start_size)
@@ -71,11 +67,12 @@ def get_dynamic_font_size(text, font_name, max_width, start_size):
 
 def draw_terminal(c, x, y, term_id, term_font_size):
     c.setLineWidth(1)
-    c.line(x - 3, y, x - 3, y + 40) # [cite: 2-7]
-    c.line(x + 3, y, x + 3, y + 40) # [cite: 2-7]
+    # Drawing terminal as parallel lines with solid black circles [cite: 1]
+    c.line(x - 3, y, x - 3, y + 40) 
+    c.line(x + 3, y, x + 3, y + 40) 
     c.setFillColorRGB(0, 0, 0)
-    c.circle(x, y + 40, 3, stroke=1, fill=1) # [cite: 2-7, 9]
-    c.circle(x, y, 3, stroke=1, fill=1)      # [cite: 2-7, 9]
+    c.circle(x, y + 40, 3, stroke=1, fill=1) 
+    c.circle(x, y, 3, stroke=1, fill=1)      
     c.setFont("Helvetica-Bold", term_font_size)
     c.drawRightString(x - 8, y + 17, str(term_id).zfill(2)) 
 
@@ -87,9 +84,11 @@ def draw_bracket_label(c, x1, x2, y, text, is_header, user_font_size):
     font_size = get_dynamic_font_size(text, "Helvetica-Bold", max_w, user_font_size)
     c.setFont("Helvetica-Bold", font_size)
     if is_header:
+        # Header bracket pointing down [cite: 1]
         c.line(x1, y, x1, y - 5); c.line(x2, y, x2, y - 5); c.line(mid, y, mid, y + 5)
-        c.drawCentredString(mid, y + 8, str(text)) # [cite: 2-8]
+        c.drawCentredString(mid, y + 8, str(text)) 
     else:
+        # Footer bracket pointing up [cite: 1]
         c.line(x1, y, x1, y + 5); c.line(x2, y, x2, y + 5); c.line(mid, y, mid, y - 5)
         c.drawCentredString(mid, y - (font_size + 6), str(text))
 
@@ -101,12 +100,14 @@ def process_terminal_drawing(df, fs_config, footer_data, left_col_data, page_siz
     
     info_column_x = draw_page_template(c, width, height, footer_data, left_col_data)
     
+    # Calculate starting point with 1.5cm safety offset [cite: 1]
     x_start = info_column_x + SAFETY_OFFSET + 15
     y_current = height - 150
     gap = 38 if page_size == "A3" else 32
     row_height = 160
     
     df = df.dropna(subset=['Terminal ID'])
+    # Automatic Sequencing Logic
     df['sort_key'] = df['Terminal ID'].apply(lambda s: int(re.findall(r'\d+', str(s))[0]) if re.findall(r'\d+', str(s)) else 0)
     df = df.sort_values(by=['Row ID', 'sort_key'])
     
@@ -119,6 +120,7 @@ def process_terminal_drawing(df, fs_config, footer_data, left_col_data, page_siz
         for idx, term in enumerate(terminals):
             draw_terminal(c, x_start + (idx * gap), y_current, term['Terminal ID'], fs_config['term'])
 
+        # Grouping Headers and Footers [cite: 4-12, 14-23]
         for type_key, is_h, y_off in [('Header', True, 53.5), ('Footer', False, -13.5)]:
             i = 0
             while i < len(terminals):
@@ -137,36 +139,43 @@ def process_terminal_drawing(df, fs_config, footer_data, left_col_data, page_siz
 
 # --- STREAMLIT INTERFACE ---
 st.set_page_config(page_title="Railway Terminal Designer", layout="wide")
-st.title("🚉 Custom Engineering Layout Generator")
+st.title("🚉 Collapsible Custom Engineering Layout Generator")
 
+# --- SIDEBAR WITH COLLAPSIBLE SUBJECTS ---
 with st.sidebar:
-    st.header("1. Page & Font Settings")
-    page_size = st.selectbox("Page Size", ["A4", "A3"])
-    fs_config = {
-        'head': st.number_input("Header Font", value=8.0),
-        'foot': st.number_input("Footer Font", value=7.0),
-        'term': st.number_input("Terminal Font", value=7.0),
-        'row': st.number_input("Row ID Font", value=12.0)
-    }
+    st.header("Customization Settings")
 
-    st.header("2. Left Column Info")
-    left_col = {
-        'line1': st.text_input("Line 1 (Bold)", value="COMPLETION DRAWING"),
-        'line2': st.text_input("Line 2", value="PCSTE'S REF NO."),
-        'line3': st.text_input("Line 3", value="7132/24")
-    }
+    # 1. Page & Font Settings Expander
+    with st.expander("🛠️ Page & Font Settings", expanded=False):
+        page_size = st.selectbox("Page Size", ["A4", "A3"])
+        fs_config = {
+            'head': st.number_input("Header Font", value=8.0),
+            'foot': st.number_input("Footer Font", value=7.0),
+            'term': st.number_input("Terminal Font", value=7.0),
+            'row': st.number_input("Row ID Font", value=12.0)
+        }
 
-    st.header("3. Bottom Footer (6 Boxes)")
-    footer = {
-        'box1': st.text_area("Box 1 (Prepared By)", value="PREPARED BY\nNOVALINE INFRA", height=70),
-        'box2': st.text_area("Box 2 (Checked)", value="CHECKED BY\nSSE/SIG", height=70),
-        'box3': st.text_area("Box 3 (Approved)", value="APPROVED BY\nDY.CSTE", height=70),
-        'box4': st.text_area("Box 4 (Location)", value="SOUTH GOOTY\nCTR-1", height=70),
-        'box5': st.text_area("Box 5 (Station)", value="BAITARANI ROAD\nSIP.ECOR.BTV.03", height=70),
-        'box6': st.text_area("Box 6 (Sheet Info)", value="SH NO: 009", height=70)
-    }
+    # 2. Left Column Info Expander
+    with st.expander("📝 Left Column Info", expanded=False):
+        left_col = {
+            'line1': st.text_input("Line 1 (Bold)", value="COMPLETION DRAWING"),
+            'line2': st.text_input("Line 2", value="PCSTE'S REF NO."),
+            'line3': st.text_input("Line 3", value="7132/24")
+        }
 
-st.subheader("Terminal Data Input")
+    # 3. Bottom Footer Expander
+    with st.expander("📂 Bottom Footer (6 Boxes)", expanded=False):
+        footer = {
+            'box1': st.text_area("Box 1 (Prepared By)", value="PREPARED BY\nNOVALINE INFRA", height=70),
+            'box2': st.text_area("Box 2 (Checked)", value="CHECKED BY\nSSE/SIG", height=70),
+            'box3': st.text_area("Box 3 (Approved)", value="APPROVED BY\nDY.CSTE", height=70),
+            'box4': st.text_area("Box 4 (Location)", value="SOUTH GOOTY\nCTR-1", height=70),
+            'box5': st.text_area("Box 5 (Station)", value="BAITARANI ROAD\nSIP.ECOR.BTV.03", height=70),
+            'box6': st.text_area("Box 6 (Sheet Info)", value="SH NO: 009", height=70)
+        }
+
+# --- MAIN PAGE DATA ENTRY ---
+st.subheader("Terminal Data Entry")
 df_input = pd.DataFrame([
     {"Row ID": "A", "Header": "DID HHG (3RD)", "Footer": "101-30C TO LOC-89", "Terminal ID": "01"},
     {"Row ID": "A", "Header": "DID HHG (3RD)", "Footer": "101-30C TO LOC-89", "Terminal ID": "02"}
