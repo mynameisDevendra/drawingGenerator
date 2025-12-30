@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.pagesizes import A4, A3, landscape
 from reportlab.pdfbase.pdfmetrics import stringWidth
 import re
 import io
@@ -51,18 +51,27 @@ def extract_number(s):
     nums = re.findall(r'\d+', str(s))
     return int(nums[0]) if nums else 0
 
-def process_terminal_drawing(df, header_fs, footer_fs, term_id_fs, row_id_fs):
+def process_terminal_drawing(df, header_fs, footer_fs, term_id_fs, row_id_fs, page_size_choice):
     buffer = io.BytesIO()
-    c = canvas.Canvas(buffer, pagesize=landscape(A4))
-    width, height = landscape(A4)
+    
+    # Selection Arrangement for A3 or A4
+    if page_size_choice == "A3":
+        selected_size = landscape(A3)
+        # Increase spacing for A3
+        x_start, row_height, gap = 120, 220, 40 
+    else:
+        selected_size = landscape(A4)
+        x_start, row_height, gap = 120, 180, 35
+
+    c = canvas.Canvas(buffer, pagesize=selected_size)
+    width, height = selected_size
+    y_current = height - 120
     
     # Cleaning and Sorting
     df = df.dropna(subset=['Terminal ID'])
     df = df[df['Terminal ID'] != ""]
     df['sort_key'] = df['Terminal ID'].apply(extract_number)
     df = df.sort_values(by=['Row ID', 'sort_key'])
-    
-    x_start, y_current, row_height, gap = 120, height - 120, 180, 35 
     
     rows = {}
     for _, item in df.iterrows():
@@ -100,6 +109,10 @@ st.set_page_config(page_title="Railway Terminal Designer", layout="wide")
 st.title("🚉 Railway Terminal Drawing Automation")
 
 with st.sidebar:
+    st.header("Page Configuration")
+    # Selection Arrangement for Page Size
+    page_size = st.selectbox("Select Page Size", ["A4", "A3"], index=0)
+    
     st.header("Font Settings (Points)")
     h_fs = st.number_input("Header Font Size", value=10.0)
     f_fs = st.number_input("Footer Font Size", value=9.0)
@@ -107,25 +120,24 @@ with st.sidebar:
     r_fs = st.number_input("Row ID Font Size", value=16.0)
 
 st.subheader("Terminal Data")
-st.info("Edit the table below. Use the '+' button at the bottom to add new terminals.")
+st.info("Edit the table below. Use the '+' button to add terminals. Identical Headers/Footers will be grouped.")
 
-# Create an editable dataframe
+# Example dataframe
 df_input = pd.DataFrame([
     {"Row ID": "A", "Header": "DID HHG", "Footer": "S-30 CTR1", "Terminal ID": "01"},
     {"Row ID": "A", "Header": "DID HHG", "Footer": "S-30 CTR1", "Terminal ID": "02"}
 ])
 
-# In your app.py, update the editor line:
 edited_df = st.data_editor(df_input, num_rows="dynamic", use_container_width=True)
 
 if st.button("🚀 Generate PDF Drawing"):
     if not edited_df.empty:
-        pdf_buffer = process_terminal_drawing(edited_df, h_fs, f_fs, t_fs, r_fs)
-        st.success("Drawing Generated!")
+        pdf_buffer = process_terminal_drawing(edited_df, h_fs, f_fs, t_fs, r_fs, page_size)
+        st.success(f"Drawing Generated for {page_size}!")
         st.download_button(
-            label="⬇️ Download PDF",
+            label=f"⬇️ Download {page_size} PDF",
             data=pdf_buffer,
-            file_name="Terminal_Layout.pdf",
+            file_name=f"Terminal_Layout_{page_size}.pdf",
             mime="application/pdf"
         )
     else:
