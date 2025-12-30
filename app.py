@@ -115,6 +115,7 @@ df_input = pd.DataFrame([
     {"Row ID": "A", "Header": "DID HHG", "Footer": "S-30 CTR1", "Terminal ID": "02"}
 ])
 
+# In your app.py, update the editor line:
 edited_df = st.data_editor(df_input, num_rows="dynamic", use_container_width=True)
 
 if st.button("🚀 Generate PDF Drawing"):
