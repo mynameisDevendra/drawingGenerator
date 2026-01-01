@@ -16,20 +16,25 @@ PAGE_SIZE = landscape(A3)
 ROW_HEIGHT_SPACING = 150 
 
 # --- SYMBOL UPLOADER HELPER ---
-def side_uploader(label):
-    uploaded_file = st.sidebar.file_uploader(f"Upload {label} (PNG/JPG)", type=['png', 'jpg', 'jpeg'], key=label)
+def side_uploader(label, keyword):
+    st.sidebar.markdown(f"**{label}** (Keyword: `{keyword}`)")
+    uploaded_file = st.sidebar.file_uploader(f"Upload {label} PNG", type=['png', 'jpg', 'jpeg'], key=label)
     if uploaded_file:
         img = Image.open(uploaded_file).convert("RGBA")
         return img
     return None
 
 # --- SIDEBAR CONFIG ---
-st.sidebar.header("🎨 Drawing Symbols")
+st.sidebar.header("🎨 Drawing Symbols & Keywords")
+st.sidebar.info("Keywords trigger special symbols. Text after the keyword becomes the label.")
+
+# Updated symbol configuration with Relay added
 symbol_config = {
-    "CHARGER": {"img": side_uploader("Charger"), "key": "CHGR"},
-    "FUSE": {"img": side_uploader("Fuse"), "key": "HR"},
-    "CHOKE": {"img": side_uploader("Choke"), "key": "TPR"},
-    "RESISTANCE": {"img": side_uploader("Resistance"), "key": "RR"}
+    "CHARGER": {"img": side_uploader("Charger", "CHGR"), "key": "CHGR"},
+    "FUSE": {"img": side_uploader("Fuse", "FUSE"), "key": "FUSE"},
+    "CHOKE": {"img": side_uploader("Choke", "CHK"), "key": "CHK"},
+    "RESISTANCE": {"img": side_uploader("Resistance", "RS"), "key": "RS"},
+    "RELAY": {"img": side_uploader("Relay", "RELAY"), "key": "RELAY"}
 }
 
 with st.sidebar.expander("✒️ Signature Setup"):
@@ -65,23 +70,22 @@ def parse_multi_sheet_txt(raw_text):
             parts = [p.strip() for p in line.split(',')]
             if len(parts) >= 2:
                 rid = parts[0].upper()
-                middle_content = ",".join(parts[1:])
-                # Match function and range 
-                pattern = r'([^,\[]+)\[\s*(\d+)\s+to\s+(\d+)\s*\]'
-                matches = re.findall(pattern, middle_content, re.I)
-                
-                cable_detail = ""
-                if any(x in parts[-1].upper() for x in ["RR", "TO", "CABLE", "GTY"]):
-                    cable_detail = parts[-1]
-
-                for match in matches:
-                    func_text = match[0].strip().upper()
-                    start, end = int(match[1]), int(match[2])
-                    for i in range(start, end + 1):
-                        current_rows.append({
-                            "Row ID": rid, "Function": func_text, 
-                            "Terminal Number": str(i).zfill(2), "Cable Detail": cable_detail
-                        })
+                for part in parts[1:]:
+                    pattern = r'([^,\[]+)\[\s*(\d+)\s+to\s+(\d+)\s*\]'
+                    match = re.search(pattern, part, re.I)
+                    if match:
+                        func_text = match.group(1).strip().upper()
+                        start, end = int(match.group(2)), int(match.group(3))
+                        cable_idx = parts.index(part) + 1
+                        cable_detail = ""
+                        if cable_idx < len(parts) and "[" not in parts[cable_idx]:
+                            cable_detail = parts[cable_idx].strip()
+                        
+                        for i in range(start, end + 1):
+                            current_rows.append({
+                                "Row ID": rid, "Function": func_text, 
+                                "Terminal Number": str(i).zfill(2), "Cable Detail": cable_detail
+                            })
     if current_rows: sheets_data.append({"meta": current_meta, "rows": current_rows})
     return sheets_data
 
@@ -158,9 +162,7 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
                 row_max_x = max(row_max_x, x_max)
                 
                 special_img, display_name = get_special_info(f_row['Function'])
-                
                 if special_img:
-                    # FIXED PLACEMENT: Centered on the terminal line y_curr
                     img_w, img_h = 50, 50
                     c.drawInlineImage(special_img, (x_min + x_max)/2 - img_w/2, y_curr - 5, width=img_w, height=img_h)
                     c.setFont("Helvetica-Bold", 10)
@@ -173,14 +175,23 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
                     c.setFont("Helvetica-Bold", 10)
                     c.drawCentredString((x_min + x_max)/2, y_curr + 60, f_row['Function'])
             
-            cable_txt = group['Cable Detail'].iloc[0]
-            if cable_txt:
+            cable_groups = group.groupby(['Cable Detail', (group['Cable Detail'] != group['Cable Detail'].shift()).cumsum()]).agg(
+                {'Terminal Number': ['min', 'max'], 'Cable Detail': 'first'}
+            ).reset_index(drop=True)
+            cable_groups.columns = ['StartTerm', 'EndTerm', 'CableText']
+
+            for _, c_row in cable_groups.iterrows():
+                if not c_row['CableText']: continue
+                c_start_idx = group.index[group['Terminal Number'] == c_row['StartTerm']][0]
+                c_end_idx = group.index[group['Terminal Number'] == c_row['EndTerm']][0]
+                cx_min, cx_max = start_x + (c_start_idx * FIXED_GAP), start_x + (c_end_idx * FIXED_GAP)
                 c.setLineWidth(0.8)
-                c.line(row_min_x - 5, y_curr - 35, row_max_x + 5, y_curr - 35)
-                c.line(row_min_x - 5, y_curr - 35, row_min_x - 5, y_curr - 30)
-                c.line(row_max_x + 5, y_curr - 35, row_max_x + 5, y_curr - 30)
+                c.line(cx_min - 5, y_curr - 35, cx_max + 5, y_curr - 35)
+                c.line(cx_min - 5, y_curr - 35, cx_min - 5, y_curr - 30)
+                c.line(cx_max + 5, y_curr - 35, cx_max + 5, y_curr - 30)
                 c.setFont("Helvetica-Oblique", 9)
-                c.drawCentredString((row_min_x + row_max_x)/2, y_curr - 50, cable_txt)
+                c.drawCentredString((cx_min + cx_max)/2, y_curr - 50, c_row['CableText'])
+                
             y_curr -= ROW_HEIGHT_SPACING
         c.showPage()
     c.save()
@@ -189,19 +200,19 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
 
 # --- MAIN APP ---
 st.title("🚉 CTR Drawing Management System")
-uploaded_file = st.file_uploader("Step 1: Upload Drawing TXT File", type=["txt"])
+uploaded_file = st.file_uploader("Upload Drawing TXT", type=["txt"])
 if uploaded_file:
     raw_text = uploaded_file.getvalue().decode("utf-8")
     st.session_state.sheets_data = parse_multi_sheet_txt(raw_text)
 
 if 'sheets_data' in st.session_state:
-    tabs = st.tabs(["📄 Data Editor & PDF Generation", "🖼️ Symbol Management"])
+    tabs = st.tabs(["📄 Data Editor", "🖼️ Symbol Management"])
     with tabs[0]:
         sel = st.selectbox("Select Sheet", range(len(st.session_state.sheets_data)), 
-                           format_func=lambda i: f"Sheet {st.session_state.sheets_data[i]['meta']['sheet']} - {st.session_state.sheets_data[i]['meta']['location']}")
+                           format_func=lambda i: f"Sheet {st.session_state.sheets_data[i]['meta']['sheet']}")
         df_editor = pd.DataFrame(st.session_state.sheets_data[sel]['rows'])
         edited_df = st.data_editor(df_editor, num_rows="dynamic", use_container_width=True)
         st.session_state.sheets_data[sel]['rows'] = edited_df.to_dict('records')
-        if st.button("🚀 Generate Final Technical PDF", use_container_width=True):
+        if st.button("🚀 Generate PDF", use_container_width=True):
             pdf_file = process_multi_sheet_pdf(st.session_state.sheets_data, sig_data, symbol_config)
-            st.download_button("📥 Download Official CTR PDF", pdf_file, f"CTR_Output.pdf", "application/pdf")
+            st.download_button("📥 Download PDF", pdf_file, f"CTR_Output.pdf", "application/pdf")
