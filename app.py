@@ -11,7 +11,6 @@ st.set_page_config(page_title="CTR Drawing System Pro", layout="wide")
 
 # --- CONSTANTS ---
 PAGE_MARGIN = 20
-SAFETY_OFFSET = 42.5
 FIXED_GAP = 33
 PAGE_SIZE = landscape(A3)
 ROW_HEIGHT_SPACING = 150 
@@ -51,6 +50,8 @@ def parse_multi_sheet_txt(raw_text):
         line = line.strip()
         if not line: continue
         upper_line = line.upper()
+        
+        # Meta Data Parsing 
         if upper_line.startswith("SHEET:"):
             if current_rows:
                 sheets_data.append({"meta": current_meta.copy(), "rows": current_rows})
@@ -62,24 +63,31 @@ def parse_multi_sheet_txt(raw_text):
         elif upper_line.startswith("SIP:"): current_meta["sip"] = line.split(":", 1)[1].strip()
         elif upper_line.startswith("HEADING:"): current_meta["heading"] = line.split(":", 1)[1].strip()
         else:
+            # Row Parsing Logic 
             parts = [p.strip() for p in line.split(',')]
             if len(parts) >= 2:
                 rid = parts[0].upper()
-                middle_part = ",".join(parts[1:-1])
-                cable_detail = parts[-1]
+                # Handle lines with or without trailing cable details 
+                middle_content = ",".join(parts[1:])
+                cable_detail = parts[-1] if any(x in parts[-1].upper() for x in ["RR", "TO", "CABLE"]) else ""
+                
                 pattern = r'([^,\[]+)\[\s*(\d+)\s+to\s+(\d+)\s*\]'
-                matches = re.findall(pattern, middle_part, re.I)
+                matches = re.findall(pattern, middle_content, re.I)
                 for match in matches:
                     func_text = match[0].strip().upper()
                     start, end = int(match[1]), int(match[2])
                     for i in range(start, end + 1):
-                        current_rows.append({"Row ID": rid, "Function": func_text, "Terminal Number": str(i).zfill(2), "Cable Detail": cable_detail})
+                        current_rows.append({
+                            "Row ID": rid, 
+                            "Function": func_text, 
+                            "Terminal Number": str(i).zfill(2), 
+                            "Cable Detail": cable_detail
+                        })
     if current_rows: sheets_data.append({"meta": current_meta, "rows": current_rows})
     return sheets_data
 
 # --- PDF DRAWING HELPERS ---
 def draw_terminal_symbol(c, x, y):
-    """Draws the standard signaling link terminal symbol."""
     c.setLineWidth(1)
     c.line(x-3, y, x-3, y+40)
     c.line(x+3, y, x+3, y+40)
@@ -122,51 +130,49 @@ def process_multi_sheet_pdf(sheets_list, sig_data, symbols):
         start_x = draw_page_template(c, width, height, f_vals, meta['sheet'], meta['heading'])
         y_curr = height - 180
         
-        for rid, group in df.groupby("Row ID"):
+        for rid, group in df.groupby("Row ID", sort=False):
             c.setFont("Helvetica-Bold", 12)
             c.drawString(PAGE_MARGIN + 30, y_curr + 15, rid)
             
-            # Draw Terminals
-            for idx, row in enumerate(group.to_dict('records')):
+            # Reset index to handle terminal positioning
+            group = group.reset_index(drop=True)
+            for idx, row in group.iterrows():
                 tx = start_x + (idx * FIXED_GAP)
                 draw_terminal_symbol(c, tx, y_curr)
                 c.setFont("Helvetica", 8)
                 c.drawCentredString(tx, y_curr - 15, row['Terminal Number'])
                 
-            # Draw Bracketed Functions (Groups)
-            func_groups = group.groupby('Function').agg({'Terminal Number': ['min', 'max']}).reset_index()
-            func_groups.columns = ['Function', 'Start', 'End']
+            # Brackets 
+            func_groups = group.groupby(['Function', (group['Function'] != group['Function'].shift()).cumsum()]).agg(
+                {'Terminal Number': ['min', 'max'], 'Function': 'first'}
+            ).reset_index(drop=True)
+            func_groups.columns = ['Start', 'End', 'Function']
             
             for _, f_row in func_groups.iterrows():
-                # Find positions based on index
-                start_idx = group[group['Terminal Number'] == f_row['Start']].index[0] - group.index[0]
-                end_idx = group[group['Terminal Number'] == f_row['End']].index[0] - group.index[0]
+                start_idx = group.index[group['Terminal Number'] == f_row['Start']][0]
+                end_idx = group.index[group['Terminal Number'] == f_row['End']][0]
                 
                 x_min = start_x + (start_idx * FIXED_GAP)
                 x_max = start_x + (end_idx * FIXED_GAP)
                 
-                # Draw Bracket
                 c.line(x_min - 5, y_curr + 50, x_max + 5, y_curr + 50)
                 c.line(x_min - 5, y_curr + 50, x_min - 5, y_curr + 45)
                 c.line(x_max + 5, y_curr + 50, x_max + 5, y_curr + 45)
                 
-                # Draw Function Name or Symbol
+                # Updated Keyword check: CHGR for Charger
                 func_name = f_row['Function']
-                if "CHR" in func_name and symbols.get("CHARGER"):
-                    # Insert Uploaded Charger Image
+                if "CHGR" in func_name and symbols.get("CHARGER"):
                     img = symbols["CHARGER"]
                     c.drawInlineImage(img, (x_min + x_max)/2 - 15, y_curr + 55, width=30, height=30)
                 else:
                     c.setFont("Helvetica-Bold", 10)
                     c.drawCentredString((x_min + x_max)/2, y_curr + 60, func_name)
                     
-            # Draw Cable Detail at the bottom
-            cable_txt = group['Cable Detail'].iloc[0]
-            c.setFont("Helvetica-Oblique", 9)
-            c.drawCentredString(width/2, y_curr - 40, cable_txt)
+            if group['Cable Detail'].iloc[0]:
+                c.setFont("Helvetica-Oblique", 9)
+                c.drawCentredString(width/2, y_curr - 40, group['Cable Detail'].iloc[0])
             
             y_curr -= ROW_HEIGHT_SPACING
-            
         c.showPage()
     c.save()
     buffer.seek(0)
@@ -194,8 +200,7 @@ if 'sheets_data' in st.session_state:
         
         if st.button("🚀 Generate Final Technical PDF", use_container_width=True):
             pdf_file = process_multi_sheet_pdf(st.session_state.sheets_data, sig_data, symbols)
-            st.download_button("📥 Download Official CTR PDF", pdf_file, f"CTR_{sig_data['app']}.pdf", "application/pdf")
+            st.download_button("📥 Download Official CTR PDF", pdf_file, f"CTR_Output.pdf", "application/pdf")
 
     with tabs[1]:
-        st.info("Upload component symbols in the sidebar to replace text labels (e.g., upload a Charger PNG to replace 'CHRPR').")
-        st.write("Current Symbols Loaded:", {k: (v is not None) for k, v in symbols.items()})
+        st.info("Upload component symbols. Use 'CHGR' in your function name to trigger the Charger symbol.")
