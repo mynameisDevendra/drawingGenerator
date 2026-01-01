@@ -73,15 +73,9 @@ def parse_multi_sheet_txt(raw_text):
     if current_rows: sheets_data.append({"meta": current_meta, "rows": current_rows})
     return sheets_data
 
-# --- PDF GENERATION (Omitted for brevity, same as previous working version) ---
-def generate_pdf_dummy(sheets, sigs):
-    # This remains the same as your original PDF logic
-    return io.BytesIO(b"PDF DATA")
-
 # --- DRAWING STUDIO LOGIC ---
 def generate_schematic_preview(sheets_data, uploaded_symbols):
     canvas_w, canvas_h = 1400, 1000
-    # White background canvas
     img_out = Image.new("RGBA", (canvas_w, canvas_h), (255, 255, 255, 255))
     draw = ImageDraw.Draw(img_out)
     
@@ -92,7 +86,6 @@ def generate_schematic_preview(sheets_data, uploaded_symbols):
         df = pd.DataFrame(sheet['rows'])
         if df.empty: continue
         
-        # Group by Function so we don't draw one symbol per pin
         groups = df.groupby(['Row ID', 'Function']).agg({'Terminal Number': ['min', 'max']}).reset_index()
         groups.columns = ['Row', 'Function', 'Start', 'End']
 
@@ -100,18 +93,15 @@ def generate_schematic_preview(sheets_data, uploaded_symbols):
             func = str(row['Function']).upper()
             sym_to_draw = None
             
-            # Match Logic
             if "CHR" in func: sym_to_draw = uploaded_symbols.get("CHARGER")
             elif "HR" in func: sym_to_draw = uploaded_symbols.get("FUSE")
             elif "TPR" in func: sym_to_draw = uploaded_symbols.get("CHOKE")
             elif "RR" in func: sym_to_draw = uploaded_symbols.get("RESISTANCE")
 
             if sym_to_draw:
-                # FIX: We paste without the mask if the image has a solid background
                 img_out.paste(sym_to_draw, (x_curr, y_curr))
                 draw.text((x_curr, y_curr + 110), f"{func} ({row['Start']}-{row['End']})", fill="black")
             else:
-                # Fallback: Red box if keyword matches but no symbol uploaded
                 draw.rectangle([x_curr, y_curr, x_curr+80, y_curr+80], outline="red", width=2)
                 draw.text((x_curr+5, y_curr+30), f"NO SYM\n{func}", fill="red")
 
@@ -125,28 +115,38 @@ def generate_schematic_preview(sheets_data, uploaded_symbols):
 # --- MAIN APP ---
 st.title("🚉 CTR Drawing Studio")
 
-tabs = st.tabs(["📄 Data Editor", "🖼️ Drawing Studio"])
+# 1. FILE UPLOADER (Outside tabs so it's always visible)
+uploaded_file = st.file_uploader("Upload Drawing TXT File", type=["txt"])
 
-with tabs[0]:
-    uploaded_file = st.file_uploader("Upload TXT", type=["txt"])
-    if uploaded_file:
-        raw_text = uploaded_file.getvalue().decode("utf-8")
-        st.session_state.sheets_data = parse_multi_sheet_txt(raw_text)
-    
-    if 'sheets_data' in st.session_state:
-        sel = st.selectbox("Select Sheet", range(len(st.session_state.sheets_data)))
+if uploaded_file:
+    raw_text = uploaded_file.getvalue().decode("utf-8")
+    st.session_state.sheets_data = parse_multi_sheet_txt(raw_text)
+    st.success("File uploaded and parsed successfully!")
+
+# 2. SHOW TABS ONLY IF DATA EXISTS
+if 'sheets_data' in st.session_state:
+    tabs = st.tabs(["📄 Data Editor", "🖼️ Drawing Studio"])
+
+    with tabs[0]:
+        st.header("Terminal Table Editor")
+        sel = st.selectbox("Select Sheet to Edit", range(len(st.session_state.sheets_data)), 
+                           format_func=lambda i: f"Sheet {st.session_state.sheets_data[i]['meta']['sheet']}")
+        
         df_editor = pd.DataFrame(st.session_state.sheets_data[sel]['rows'])
         edited_df = st.data_editor(df_editor, num_rows="dynamic", use_container_width=True)
         st.session_state.sheets_data[sel]['rows'] = edited_df.to_dict('records')
+        
+        st.info("The Generate PDF button is generally here in the Table Editor tab.")
 
-with tabs[1]:
-    if 'sheets_data' in st.session_state:
-        if st.button("🛠️ Generate Schematic"):
+    with tabs[1]:
+        st.header("Schematic Drawing Preview")
+        # THIS IS THE GENERATE BUTTON
+        if st.button("🛠️ Generate Schematic Preview"):
             drawing = generate_schematic_preview(st.session_state.sheets_data, symbols)
-            st.image(drawing)
+            st.image(drawing, caption="Generated Layout")
             
             buf = io.BytesIO()
             drawing.save(buf, format="PNG")
-            st.download_button("📥 Download Schematic", buf.getvalue(), "schematic.png", "image/png")
-    else:
-        st.warning("Upload a TXT file first.")
+            st.download_button("📥 Download Schematic PNG", buf.getvalue(), "schematic.png", "image/png")
+else:
+    st.warning("Please upload a .txt file to start.")
