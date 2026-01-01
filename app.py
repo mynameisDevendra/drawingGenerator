@@ -181,6 +181,12 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
                 si, ei = block.index[0], block.index[-1]
                 cxm, cxx = start_x + (si * FIXED_GAP), start_x + (ei * FIXED_GAP)
                 
+		s_img, d_label = get_special_info(c_text)
+		if s_img:
+                    c.drawInlineImage(s_img, (cxm+cxx)/2 - 25, y_curr - 5, width=50, height=50)
+                    c.setFont("Helvetica-Bold", 9)
+                    c.drawCentredString((cxm+cxx)/2, y_curr + 55, d_label)
+                else:
                 c.setLineWidth(0.8)
                 c.line(cxm-5, y_curr - 35, cxx+5, y_curr - 35)
                 c.line(cxm-5, y_curr - 35, cxm-5, y_curr - 30)
