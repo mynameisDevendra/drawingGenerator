@@ -5,7 +5,7 @@ from reportlab.lib.pagesizes import A3, landscape
 import re
 import io
 from datetime import datetime
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 # --- UI CONFIG & CUSTOM CSS ---
 st.set_page_config(page_title="CTR Generator Pro & Drawing Studio", layout="wide")
@@ -42,12 +42,11 @@ def side_uploader(label):
     uploaded_file = st.sidebar.file_uploader(f"Upload {label} (PNG)", type=['png'], key=label)
     if uploaded_file:
         img = Image.open(uploaded_file).convert("RGBA")
-        img.thumbnail((80, 80)) # Resize for drawing
+        img.thumbnail((100, 100)) 
         st.sidebar.image(img, width=40)
         return img
     return None
 
-# Map for the Drawing Studio
 symbols = {
     "FUSE": side_uploader("Fuse"),
     "CHOKE": side_uploader("Choke"),
@@ -103,19 +102,6 @@ def parse_multi_sheet_txt(raw_text):
                         })
     if current_rows: sheets_data.append({"meta": current_meta, "rows": current_rows})
     return sheets_data
-
-def validate_terminal_sequences(sheets_data):
-    errors = []
-    for s_idx, sheet in enumerate(sheets_data):
-        df = pd.DataFrame(sheet['rows'])
-        if df.empty: continue
-        df['num'] = pd.to_numeric(df['Terminal Number'], errors='coerce')
-        for rid, group in df.groupby('Row ID'):
-            nums = sorted(group['num'].dropna().unique())
-            for i in range(len(nums) - 1):
-                if nums[i+1] != nums[i] + 1:
-                    errors.append({"Sheet/Loc": sheet['meta']['location'], "Row": rid, "Error": f"Gap after {nums[i]}"})
-    return errors
 
 def draw_group_line(c, x1, x2, y, is_top=True):
     c.setLineWidth(0.8)
@@ -209,34 +195,52 @@ def process_multi_sheet_pdf(sheets_list, sig_data):
         c.showPage() 
     c.save(); buffer.seek(0); return buffer
 
-# --- DRAWING STUDIO: IMAGE GENERATION ---
+# --- DRAWING STUDIO: IMPROVED LOGIC ---
 
 def generate_schematic_preview(sheets_data, uploaded_symbols):
-    """Creates a visual canvas representing the hardware layout using uploaded PNGs."""
-    canvas_w, canvas_h = 1200, 600
+    canvas_w, canvas_h = 1400, 800
     img_out = Image.new("RGBA", (canvas_w, canvas_h), "white")
+    draw = ImageDraw.Draw(img_out)
     
-    # Simple placement logic based on functions found in the text
-    # e.g., if function contains 'CHR', place CHARGER symbol
-    x_offset = 50
-    y_offset = 100
+    x_offset, y_offset = 80, 80
     
     for sheet in sheets_data:
-        for row in sheet['rows']:
-            func = row['Function'].upper()
+        df = pd.DataFrame(sheet['rows'])
+        if df.empty: continue
+        
+        # GROUP BY FUNCTION TO AVOID DUPLICATE SYMBOLS FOR EVERY TERMINAL
+        summary = df.groupby(['Row ID', 'Function']).agg({'Terminal Number': ['min', 'max']}).reset_index()
+        summary.columns = ['Row', 'Function', 'Start', 'End']
+
+        for _, row in summary.iterrows():
+            func = str(row['Function']).upper()
             sym_to_draw = None
             
-            if "CHR" in func and uploaded_symbols["CHARGER"]: sym_to_draw = uploaded_symbols["CHARGER"]
-            elif "HR" in func and uploaded_symbols["FUSE"]: sym_to_draw = uploaded_symbols["FUSE"]
-            elif "TPR" in func and uploaded_symbols["CHOKE"]: sym_to_draw = uploaded_symbols["CHOKE"]
-            elif "RR" in func and uploaded_symbols["RESISTANCE"]: sym_to_draw = uploaded_symbols["RESISTANCE"]
-            
+            # Precise Matching
+            if "CHR" in func and uploaded_symbols["CHARGER"]: 
+                sym_to_draw = uploaded_symbols["CHARGER"]
+            elif "TPR" in func and uploaded_symbols["CHOKE"]: 
+                sym_to_draw = uploaded_symbols["CHOKE"]
+            elif "RR" in func and uploaded_symbols["RESISTANCE"]: 
+                sym_to_draw = uploaded_symbols["RESISTANCE"]
+            elif "HR" in func and uploaded_symbols["FUSE"]: 
+                sym_to_draw = uploaded_symbols["FUSE"]
+
             if sym_to_draw:
+                # Paste the actual uploaded symbol
                 img_out.paste(sym_to_draw, (x_offset, y_offset), sym_to_draw)
-                x_offset += 100
-                if x_offset > canvas_w - 100:
-                    x_offset = 50
-                    y_offset += 120
+                # Add Label
+                label = f"{func}\n({row['Start']}-{row['End']})"
+                draw.text((x_offset, y_offset + 105), label, fill="black")
+            else:
+                # If no symbol, draw a generic terminal block placeholder
+                draw.rectangle([x_offset, y_offset, x_offset+60, y_offset+40], outline="blue", width=2)
+                draw.text((x_offset+5, y_offset+45), func[:8], fill="blue")
+
+            x_offset += 150
+            if x_offset > canvas_w - 150:
+                x_offset = 80
+                y_offset += 180
     
     return img_out
 
@@ -278,7 +282,7 @@ with tabs[0]:
 
 with tabs[1]:
     st.header("Component Layout Preview")
-    st.info("The drawing studio maps your uploaded PNG symbols to the functions defined in the CTR table.")
+    st.info("Symbols are grouped by function. Upload PNGs in the sidebar to see them here.")
     
     if 'sheets_data' in st.session_state:
         if st.button("🛠️ Generate Schematic Preview"):
