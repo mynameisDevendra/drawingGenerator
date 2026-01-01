@@ -4,8 +4,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A3, landscape
 import re
 import io
-from datetime import datetime
-from PIL import Image, ImageDraw
+from PIL import Image
 
 # --- UI CONFIG ---
 st.set_page_config(page_title="CTR Drawing System Pro", layout="wide")
@@ -15,15 +14,13 @@ PAGE_MARGIN = 20
 SAFETY_OFFSET = 42.5
 FIXED_GAP = 33
 PAGE_SIZE = landscape(A3)
-ROW_HEIGHT_SPACING = 105 
+ROW_HEIGHT_SPACING = 150 
 
 # --- SYMBOL UPLOADER HELPER ---
 def side_uploader(label):
     uploaded_file = st.sidebar.file_uploader(f"Upload {label} (PNG/JPG)", type=['png', 'jpg', 'jpeg'], key=label)
     if uploaded_file:
         img = Image.open(uploaded_file).convert("RGBA")
-        img.thumbnail((100, 100)) 
-        st.sidebar.image(img, width=60, caption=f"Active {label}")
         return img
     return None
 
@@ -44,11 +41,12 @@ with st.sidebar.expander("✒️ Signature Setup"):
         "app": st.text_input("DSTE", "DSTE")
     }
 
-# --- PARSING & PDF LOGIC ---
+# --- PARSING LOGIC ---
 def parse_multi_sheet_txt(raw_text):
     sheets_data = []
     current_meta = {"sheet": 1, "station": "", "location": "", "sip": "", "heading": "TERMINAL CHART"}
     current_rows = []
+    
     for line in raw_text.splitlines():
         line = line.strip()
         if not line: continue
@@ -67,89 +65,112 @@ def parse_multi_sheet_txt(raw_text):
             parts = [p.strip() for p in line.split(',')]
             if len(parts) >= 2:
                 rid = parts[0].upper()
-                middle_part = ",".join(parts[1:])
+                middle_part = ",".join(parts[1:-1])
+                cable_detail = parts[-1]
                 pattern = r'([^,\[]+)\[\s*(\d+)\s+to\s+(\d+)\s*\]'
                 matches = re.findall(pattern, middle_part, re.I)
                 for match in matches:
                     func_text = match[0].strip().upper()
                     start, end = int(match[1]), int(match[2])
                     for i in range(start, end + 1):
-                        current_rows.append({"Row ID": rid, "Function": func_text, "Terminal Number": str(i).zfill(2), "Cable Detail": ""})
+                        current_rows.append({"Row ID": rid, "Function": func_text, "Terminal Number": str(i).zfill(2), "Cable Detail": cable_detail})
     if current_rows: sheets_data.append({"meta": current_meta, "rows": current_rows})
     return sheets_data
+
+# --- PDF DRAWING HELPERS ---
+def draw_terminal_symbol(c, x, y):
+    """Draws the standard signaling link terminal symbol."""
+    c.setLineWidth(1)
+    c.line(x-3, y, x-3, y+40)
+    c.line(x+3, y, x+3, y+40)
+    c.circle(x, y+40, 3, fill=1)
+    c.circle(x, y, 3, fill=1)
 
 def draw_page_template(c, width, height, footer_values, sheet_num, page_heading):
     c.setLineWidth(1.5)
     c.rect(PAGE_MARGIN, PAGE_MARGIN, width - (2 * PAGE_MARGIN), height - (2 * PAGE_MARGIN))
     c.setFont("Helvetica-Bold", 16)
     c.drawCentredString(width / 2, height - 60, page_heading.upper())
+    
     footer_y = PAGE_MARGIN + 60
     c.line(PAGE_MARGIN, footer_y, width - PAGE_MARGIN, footer_y)
     total_footer_w = width - (2 * PAGE_MARGIN)
     info_x = PAGE_MARGIN + (total_footer_w / 15)
-    c.line(info_x, PAGE_MARGIN, info_x, height - PAGE_MARGIN)
-    remaining_w = total_footer_w - (total_footer_w / 15)
-    box_w = remaining_w / 7 
-    dividers = [info_x + (i * box_w) for i in range(8)] 
-    for x in dividers[:-1]: c.line(x, PAGE_MARGIN, x, footer_y)
-    headers = ["PREPARED BY", "CHECKED BY", "CHECKED BY", "APPROVED BY", "LOC/GOOMTY", "STATION", "SIP", "SHEET"]
+    
+    headers = ["PREPARED BY", "CHECKED BY", "CHECKED BY", "APPROVED BY", "LOCATION NO", "STATION", "SIP", "SHEET"]
+    box_w = (total_footer_w - info_x) / 7
     for i in range(8):
-        x_start = PAGE_MARGIN if i == 0 else dividers[i-1]
-        x_end = dividers[i]
+        x = info_x + (i * box_w) if i > 0 else PAGE_MARGIN
+        curr_w = info_x - PAGE_MARGIN if i == 0 else box_w
         c.setFont("Helvetica-Bold", 8)
-        c.drawCentredString((x_start+x_end)/2, footer_y - 12, headers[i])
+        c.drawCentredString(x + curr_w/2, footer_y - 15, headers[i])
         val = f"{sheet_num:02}" if i == 7 else str(footer_values[i])
-        c.drawCentredString((x_start+x_end)/2, PAGE_MARGIN + 20, val.upper())
-    return info_x
+        c.drawCentredString(x + curr_w/2, PAGE_MARGIN + 20, val.upper())
+        if i < 7: c.line(x + curr_w, PAGE_MARGIN, x + curr_w, footer_y)
+    return info_x + 30
 
-def process_multi_sheet_pdf(sheets_list, sig_data):
+def process_multi_sheet_pdf(sheets_list, sig_data, symbols):
     buffer = io.BytesIO()
     width, height = PAGE_SIZE
     c = canvas.Canvas(buffer, pagesize=PAGE_SIZE)
+    
     for sheet in sheets_list:
         meta = sheet['meta']
         df = pd.DataFrame(sheet['rows'])
         f_vals = [sig_data['prep'], sig_data['chk1'], sig_data['chk2'], sig_data['app'], meta['location'], meta['station'], meta['sip'], ""]
-        info_x = draw_page_template(c, width, height, f_vals, meta['sheet'], meta['heading'])
-        # Simple rendering for the PDF terminals
-        y_curr = height - 150
+        
+        start_x = draw_page_template(c, width, height, f_vals, meta['sheet'], meta['heading'])
+        y_curr = height - 180
+        
         for rid, group in df.groupby("Row ID"):
             c.setFont("Helvetica-Bold", 12)
-            c.drawString(info_x + 20, y_curr, f"ROW {rid}: " + ", ".join(group['Function'].unique()))
-            y_curr -= 30
+            c.drawString(PAGE_MARGIN + 30, y_curr + 15, rid)
+            
+            # Draw Terminals
+            for idx, row in enumerate(group.to_dict('records')):
+                tx = start_x + (idx * FIXED_GAP)
+                draw_terminal_symbol(c, tx, y_curr)
+                c.setFont("Helvetica", 8)
+                c.drawCentredString(tx, y_curr - 15, row['Terminal Number'])
+                
+            # Draw Bracketed Functions (Groups)
+            func_groups = group.groupby('Function').agg({'Terminal Number': ['min', 'max']}).reset_index()
+            func_groups.columns = ['Function', 'Start', 'End']
+            
+            for _, f_row in func_groups.iterrows():
+                # Find positions based on index
+                start_idx = group[group['Terminal Number'] == f_row['Start']].index[0] - group.index[0]
+                end_idx = group[group['Terminal Number'] == f_row['End']].index[0] - group.index[0]
+                
+                x_min = start_x + (start_idx * FIXED_GAP)
+                x_max = start_x + (end_idx * FIXED_GAP)
+                
+                # Draw Bracket
+                c.line(x_min - 5, y_curr + 50, x_max + 5, y_curr + 50)
+                c.line(x_min - 5, y_curr + 50, x_min - 5, y_curr + 45)
+                c.line(x_max + 5, y_curr + 50, x_max + 5, y_curr + 45)
+                
+                # Draw Function Name or Symbol
+                func_name = f_row['Function']
+                if "CHR" in func_name and symbols.get("CHARGER"):
+                    # Insert Uploaded Charger Image
+                    img = symbols["CHARGER"]
+                    c.drawInlineImage(img, (x_min + x_max)/2 - 15, y_curr + 55, width=30, height=30)
+                else:
+                    c.setFont("Helvetica-Bold", 10)
+                    c.drawCentredString((x_min + x_max)/2, y_curr + 60, func_name)
+                    
+            # Draw Cable Detail at the bottom
+            cable_txt = group['Cable Detail'].iloc[0]
+            c.setFont("Helvetica-Oblique", 9)
+            c.drawCentredString(width/2, y_curr - 40, cable_txt)
+            
+            y_curr -= ROW_HEIGHT_SPACING
+            
         c.showPage()
     c.save()
     buffer.seek(0)
     return buffer
-
-# --- DRAWING STUDIO LOGIC ---
-def generate_schematic_preview(sheets_data, uploaded_symbols):
-    canvas_w, canvas_h = 1400, 1000
-    img_out = Image.new("RGBA", (canvas_w, canvas_h), (255, 255, 255, 255))
-    draw = ImageDraw.Draw(img_out)
-    x_curr, y_curr = 100, 100
-    for sheet in sheets_data:
-        df = pd.DataFrame(sheet['rows'])
-        groups = df.groupby(['Row ID', 'Function']).agg({'Terminal Number': ['min', 'max']}).reset_index()
-        groups.columns = ['Row', 'Function', 'Start', 'End']
-        for _, row in groups.iterrows():
-            func = str(row['Function']).upper()
-            sym_to_draw = None
-            if "CHR" in func: sym_to_draw = uploaded_symbols.get("CHARGER")
-            elif "HR" in func: sym_to_draw = uploaded_symbols.get("FUSE")
-            elif "TPR" in func: sym_to_draw = uploaded_symbols.get("CHOKE")
-            elif "RR" in func: sym_to_draw = uploaded_symbols.get("RESISTANCE")
-
-            if sym_to_draw:
-                img_out.paste(sym_to_draw, (x_curr, y_curr))
-                draw.text((x_curr, y_curr + 110), f"{func}", fill="black")
-            else:
-                draw.rectangle([x_curr, y_curr, x_curr+80, y_curr+80], outline="red", width=2)
-                draw.text((x_curr+5, y_curr+30), f"MISSING\n{func}", fill="red")
-            x_curr += 220
-            if x_curr > canvas_w - 200:
-                x_curr = 100; y_curr += 250
-    return img_out
 
 # --- MAIN APP ---
 st.title("🚉 CTR Drawing Management System")
@@ -161,29 +182,20 @@ if uploaded_file:
     st.session_state.sheets_data = parse_multi_sheet_txt(raw_text)
 
 if 'sheets_data' in st.session_state:
-    tabs = st.tabs(["📄 Data Editor & PDF", "🖼️ Drawing Studio"])
+    tabs = st.tabs(["📄 Data Editor & PDF Generation", "🖼️ Symbol Management"])
 
     with tabs[0]:
-        st.header("1. Edit Terminal Data")
         sel = st.selectbox("Select Sheet", range(len(st.session_state.sheets_data)), 
-                           format_func=lambda i: f"Sheet {st.session_state.sheets_data[i]['meta']['sheet']}")
+                           format_func=lambda i: f"Sheet {st.session_state.sheets_data[i]['meta']['sheet']} - {st.session_state.sheets_data[i]['meta']['location']}")
         
         df_editor = pd.DataFrame(st.session_state.sheets_data[sel]['rows'])
         edited_df = st.data_editor(df_editor, num_rows="dynamic", use_container_width=True)
         st.session_state.sheets_data[sel]['rows'] = edited_df.to_dict('records')
         
-        st.divider()
-        st.header("2. Finalize Document")
-        # THIS IS THE PDF GENERATE BUTTON
-        if st.button("🚀 Generate Technical PDF Document", use_container_width=True):
-            pdf_file = process_multi_sheet_pdf(st.session_state.sheets_data, sig_data)
-            st.download_button("📥 Download Official PDF", pdf_file, "CTR_Official_Report.pdf", "application/pdf", use_container_width=True)
+        if st.button("🚀 Generate Final Technical PDF", use_container_width=True):
+            pdf_file = process_multi_sheet_pdf(st.session_state.sheets_data, sig_data, symbols)
+            st.download_button("📥 Download Official CTR PDF", pdf_file, f"CTR_{sig_data['app']}.pdf", "application/pdf")
 
     with tabs[1]:
-        st.header("Component Schematic Preview")
-        if st.button("🛠️ Generate Schematic Preview"):
-            drawing = generate_schematic_preview(st.session_state.sheets_data, symbols)
-            st.image(drawing)
-            buf = io.BytesIO()
-            drawing.save(buf, format="PNG")
-            st.download_button("📥 Download PNG", buf.getvalue(), "schematic.png", "image/png")
+        st.info("Upload component symbols in the sidebar to replace text labels (e.g., upload a Charger PNG to replace 'CHRPR').")
+        st.write("Current Symbols Loaded:", {k: (v is not None) for k, v in symbols.items()})
