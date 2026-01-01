@@ -41,7 +41,7 @@ with st.sidebar.expander("✒️ Signature Setup"):
         "app": st.text_input("DSTE", "DSTE")
     }
 
-# --- ADVANCED PARSING LOGIC ---
+# --- ADVANCED CABLE PARSING LOGIC ---
 def parse_multi_sheet_txt(raw_text):
     sheets_data = []
     current_meta = {"sheet": 1, "station": "", "location": "", "sip": "", "heading": "TERMINAL CHART"}
@@ -51,7 +51,6 @@ def parse_multi_sheet_txt(raw_text):
         line = line.strip()
         if not line: continue
         
-        # Meta Data
         if line.upper().startswith("SHEET:"):
             if current_rows:
                 sheets_data.append({"meta": current_meta.copy(), "rows": current_rows})
@@ -63,20 +62,18 @@ def parse_multi_sheet_txt(raw_text):
         elif line.upper().startswith("SIP:"): current_meta["sip"] = line.split(":", 1)[1].strip()
         elif line.upper().startswith("HEADING:"): current_meta["heading"] = line.split(":", 1)[1].strip()
         else:
-            # Row Data Parsing
             parts = [p.strip() for p in line.split(',')]
             if len(parts) >= 2:
                 rid = parts[0].upper()
                 for i in range(1, len(parts)):
                     part = parts[i]
-                    # Regex to find Function and Range
                     pattern = r'([^,\[]+)\[\s*(\d+)\s+[tT][oO]\s+(\d+)\s*\]'
                     match = re.search(pattern, part)
                     if match:
                         func_text = match.group(1).strip().upper()
                         start, end = int(match.group(2)), int(match.group(3))
                         
-                        # Peek ahead to find the specific cable detail for THIS group
+                        # LOGIC: Link cable detail ONLY to the preceding function group
                         cable_detail = ""
                         if i+1 < len(parts) and "[" not in parts[i+1]:
                             cable_detail = parts[i+1]
@@ -103,12 +100,10 @@ def draw_page_template(c, width, height, footer_values, sheet_num, page_heading)
     c.rect(PAGE_MARGIN, PAGE_MARGIN, width - (2 * PAGE_MARGIN), height - (2 * PAGE_MARGIN))
     c.setFont("Helvetica-Bold", 16)
     c.drawCentredString(width / 2, height - 60, page_heading.upper())
-    
     footer_y = PAGE_MARGIN + 60
     c.line(PAGE_MARGIN, footer_y, width - PAGE_MARGIN, footer_y)
     total_footer_w = width - (2 * PAGE_MARGIN)
     info_x = PAGE_MARGIN + (total_footer_w / 15)
-    
     headers = ["PREPARED BY", "CHECKED BY", "CHECKED BY", "APPROVED BY", "LOCATION NO", "STATION", "SIP", "SHEET"]
     box_w = (total_footer_w - info_x) / 7
     for i in range(8):
@@ -137,53 +132,48 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
         meta = sheet['meta']
         df = pd.DataFrame(sheet['rows'])
         f_vals = [sig_data['prep'], sig_data['chk1'], sig_data['chk2'], sig_data['app'], meta['location'], meta['station'], meta['sip'], ""]
-        
         start_x = draw_page_template(c, width, height, f_vals, meta['sheet'], meta['heading'])
         y_curr = height - 180
         
-        # Group by Row (A, B, C)
         for rid, group in df.groupby("Row ID", sort=False):
             c.setFont("Helvetica-Bold", 12)
             c.drawString(PAGE_MARGIN + 30, y_curr + 15, rid)
             group = group.reset_index(drop=True)
             
-            # 1. Individual Terminal Elements
+            # 1. Terminals
             for idx, row in group.iterrows():
                 tx = start_x + (idx * FIXED_GAP)
                 s_img, _ = get_special_info(row['Function'])
-                # Only draw links and numbers if it is NOT a special symbol
                 if not s_img:
                     draw_terminal_symbol(c, tx, y_curr)
                     c.setFont("Helvetica", 8)
                     c.drawCentredString(tx, y_curr - 15, row['Terminal Number'])
                 
-            # 2. Function Grouping (Brackets / Symbols)
+            # 2. Function Groups
             func_groups = group.groupby(['Function', (group['Function'] != group['Function'].shift()).cumsum()]).agg(
                 {'Terminal Number': ['min', 'max'], 'Function': 'first'}
             ).reset_index(drop=True)
-            func_groups.columns = ['S_Term', 'E_Term', 'F_Name']
+            func_groups.columns = ['ST', 'ET', 'FN']
             
-            for _, f_row in func_groups.iterrows():
-                si = group.index[group['Terminal Number'] == f_row['S_Term']][0]
-                ei = group.index[group['Terminal Number'] == f_row['E_Term']][0]
+            for _, fr in func_groups.iterrows():
+                si = group.index[group['Terminal Number'] == fr['ST']][0]
+                ei = group.index[group['Terminal Number'] == fr['ET']][0]
                 xm, xx = start_x + (si * FIXED_GAP), start_x + (ei * FIXED_GAP)
                 
-                s_img, d_label = get_special_info(f_row['F_Name'])
+                s_img, d_label = get_special_info(fr['FN'])
                 if s_img:
-                    # Draw Special PNG and Cleaned Text Label
                     c.drawInlineImage(s_img, (xm+xx)/2 - 25, y_curr - 5, width=50, height=50)
                     c.setFont("Helvetica-Bold", 10)
                     c.drawCentredString((xm+xx)/2, y_curr + 55, d_label)
                 else:
-                    # Draw Standard Top Bracket and Name
                     c.setLineWidth(0.8)
                     c.line(xm-5, y_curr+50, xx+5, y_curr+50)
                     c.line(xm-5, y_curr+50, xm-5, y_curr+45)
                     c.line(xx+5, y_curr+50, xx+5, y_curr+45)
                     c.setFont("Helvetica-Bold", 10)
-                    c.drawCentredString((xm+xx)/2, y_curr+60, f_row['F_Name'])
+                    c.drawCentredString((xm+xx)/2, y_curr+60, fr['FN'])
             
-            # 3. Cable Detail Grouping (Bottom Brackets)
+            # 3. INDEPENDENT CABLE BRACKETS
             cable_groups = group.groupby(['Cable Detail', (group['Cable Detail'] != group['Cable Detail'].shift()).cumsum()]).agg(
                 {'Terminal Number': ['min', 'max'], 'Cable Detail': 'first'}
             ).reset_index(drop=True)
