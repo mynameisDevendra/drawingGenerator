@@ -187,12 +187,12 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
                     c.setFont("Helvetica-Bold", 9)
                     c.drawCentredString((cxm+cxx)/2, y_curr + 55, d_label)
                 else:
-                c.setLineWidth(0.8)
-                c.line(cxm-5, y_curr - 35, cxx+5, y_curr - 35)
-                c.line(cxm-5, y_curr - 35, cxm-5, y_curr - 30)
-                c.line(cxx+5, y_curr - 35, cxx+5, y_curr - 30)
-                c.setFont("Helvetica-Oblique", 9)
-                c.drawCentredString((cxm+cxx)/2, y_curr - 50, str(c_text))
+                    c.setLineWidth(0.8)
+                    c.line(cxm-5, y_curr - 35, cxx+5, y_curr - 35)
+                    c.line(cxm-5, y_curr - 35, cxm-5, y_curr - 30)
+                    c.line(cxx+5, y_curr - 35, cxx+5, y_curr - 30)
+                    c.setFont("Helvetica-Oblique", 9)
+                    c.drawCentredString((cxm+cxx)/2, y_curr - 50, str(c_text))
                 
             y_curr -= ROW_HEIGHT_SPACING
         c.showPage()
