@@ -13,7 +13,7 @@ st.set_page_config(page_title="CTR Drawing System Pro", layout="wide")
 PAGE_MARGIN = 20
 FIXED_GAP = 33
 PAGE_SIZE = landscape(A3)
-ROW_HEIGHT_SPACING = 150 
+ROW_HEIGHT_SPACING = 160 
 
 # --- SIDEBAR: SYMBOL UPLOADS ---
 st.sidebar.header("🎨 Drawing Symbols")
@@ -33,7 +33,7 @@ symbol_config = {
     "RELAY": {"img": side_uploader("Relay"), "key": "RELAY"}
 }
 
-# --- REWRITTEN PARSING LOGIC: LOOKAHEAD-LINKER ---
+# --- PARSING LOGIC ---
 def parse_multi_sheet_txt(raw_text):
     sheets_data = []
     current_meta = {"sheet": 1, "station": "", "location": "", "sip": "", "heading": "TERMINAL CHART"}
@@ -55,23 +55,16 @@ def parse_multi_sheet_txt(raw_text):
         elif upper_line.startswith("SIP:"): current_meta["sip"] = line.split(":", 1)[1].strip()
         elif upper_line.startswith("HEADING:"): current_meta["heading"] = line.split(":", 1)[1].strip()
         else:
-            # Row Data Parsing
             parts = [p.strip() for p in line.split(',')]
             if len(parts) >= 2:
                 rid = parts[0].upper()
-                
                 for i in range(1, len(parts)):
                     part = parts[i]
-                    # Identify Function Range: e.g., 12HG [01 to 04]
                     pattern = r'([^,\[]+)\[\s*(\d+)\s+[tT][oO]\s+(\d+)\s*\]'
                     match = re.search(pattern, part)
-                    
                     if match:
                         func_text = match.group(1).strip().upper()
                         start, end = int(match.group(2)), int(match.group(3))
-                        
-                        # CABLE GROUPING LOGIC: 
-                        # Use the part immediately following this function as its cable detail
                         cable_detail = ""
                         if i + 1 < len(parts) and "[" not in parts[i+1]:
                             cable_detail = parts[i+1]
@@ -87,7 +80,7 @@ def parse_multi_sheet_txt(raw_text):
     if current_rows: sheets_data.append({"meta": current_meta, "rows": current_rows})
     return sheets_data
 
-# --- PDF DRAWING LOGIC ---
+# --- PDF DRAWING UTILS ---
 def draw_terminal_symbol(c, x, y):
     c.setLineWidth(1)
     c.line(x-3, y, x-3, y+40)
@@ -118,6 +111,7 @@ def draw_page_template(c, width, height, footer_values, sheet_num, page_heading)
         if i < 7: c.line(x + curr_w, PAGE_MARGIN, x + curr_w, footer_y)
     return info_x + 30
 
+# --- CORE PDF PROCESSING ---
 def process_multi_sheet_pdf(sheets_list, sig_data, config):
     buffer = io.BytesIO()
     width, height = PAGE_SIZE
@@ -134,10 +128,17 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
         meta = sheet['meta']
         df = pd.DataFrame(sheet['rows'])
         f_vals = [sig_data['prep'], sig_data['chk1'], sig_data['chk2'], sig_data['app'], meta['location'], meta['station'], meta['sip'], ""]
+        
         start_x = draw_page_template(c, width, height, f_vals, meta['sheet'], meta['heading'])
         y_curr = height - 180
         
         for rid, group in df.groupby("Row ID", sort=False):
+            # Page Overflow Check
+            if y_curr < (PAGE_MARGIN + 120):
+                c.showPage()
+                start_x = draw_page_template(c, width, height, f_vals, meta['sheet'], meta['heading'])
+                y_curr = height - 180
+
             c.setFont("Helvetica-Bold", 12)
             c.drawString(PAGE_MARGIN + 30, y_curr + 15, rid)
             group = group.reset_index(drop=True)
@@ -145,24 +146,20 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
             # 1. Terminals
             for idx, row in group.iterrows():
                 tx = start_x + (idx * FIXED_GAP)
-                s_img, _ = get_special_info(row['Function'])
+                s_img, _ = get_special_info(str(row['Function']))
                 if not s_img:
                     draw_terminal_symbol(c, tx, y_curr)
                     c.setFont("Helvetica", 8)
-                    c.drawCentredString(tx, y_curr - 15, row['Terminal Number'])
+                    c.drawCentredString(tx, y_curr - 15, str(row['Terminal Number']))
                 
-            # 2. Function Grouping (Upper Brackets)
-            func_groups = group.groupby(['Function', (group['Function'] != group['Function'].shift()).cumsum()]).agg(
-                {'Terminal Number': ['min', 'max'], 'Function': 'first'}
-            ).reset_index(drop=True)
-            func_groups.columns = ['StartT', 'EndT', 'FText']
-            
-            for _, fr in func_groups.iterrows():
-                si = group.index[group['Terminal Number'] == fr['StartT']][0]
-                ei = group.index[group['Terminal Number'] == fr['EndT']][0]
+            # 2. Function Grouping (Upper Brackets) - Grouping by consecutive Function values
+            func_blocks = group.groupby((group['Function'] != group['Function'].shift()).cumsum())
+            for _, block in func_blocks:
+                f_text = block['Function'].iloc[0]
+                si, ei = block.index[0], block.index[-1]
                 xm, xx = start_x + (si * FIXED_GAP), start_x + (ei * FIXED_GAP)
                 
-                s_img, d_label = get_special_info(fr['FText'])
+                s_img, d_label = get_special_info(f_text)
                 if s_img:
                     c.drawInlineImage(s_img, (xm+xx)/2 - 25, y_curr - 5, width=50, height=50)
                     c.setFont("Helvetica-Bold", 10)
@@ -173,29 +170,27 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
                     c.line(xm-5, y_curr+50, xm-5, y_curr+45)
                     c.line(xx+5, y_curr+50, xx+5, y_curr+45)
                     c.setFont("Helvetica-Bold", 10)
-                    c.drawCentredString((xm+xx)/2, y_curr+60, fr['FText'])
+                    c.drawCentredString((xm+xx)/2, y_curr+60, f_text)
             
-            # 3. Cable Detail Grouping (Bottom Brackets)
-            cable_groups = group.groupby(['Cable Detail', (group['Cable Detail'] != group['Cable Detail'].shift()).cumsum()]).agg(
-                {'Terminal Number': ['min', 'max'], 'Cable Detail': 'first'}
-            ).reset_index(drop=True)
-            cable_groups.columns = ['CS', 'CE', 'CT']
-
-            for _, cr in cable_groups.iterrows():
-                if not cr['CT']: continue
-                csi = group.index[group['Terminal Number'] == cr['CS']][0]
-                cei = group.index[group['Terminal Number'] == cr['CE']][0]
-                cxm, cxx = start_x + (csi * FIXED_GAP), start_x + (cei * FIXED_GAP)
+            # 3. Cable Detail Grouping (Bottom Brackets) - Grouping by consecutive Cable Detail values
+            cable_blocks = group.groupby((group['Cable Detail'] != group['Cable Detail'].shift()).cumsum())
+            for _, block in cable_blocks:
+                c_text = block['Cable Detail'].iloc[0]
+                if not c_text or str(c_text).strip() == "": continue
+                
+                si, ei = block.index[0], block.index[-1]
+                cxm, cxx = start_x + (si * FIXED_GAP), start_x + (ei * FIXED_GAP)
                 
                 c.setLineWidth(0.8)
                 c.line(cxm-5, y_curr - 35, cxx+5, y_curr - 35)
                 c.line(cxm-5, y_curr - 35, cxm-5, y_curr - 30)
                 c.line(cxx+5, y_curr - 35, cxx+5, y_curr - 30)
                 c.setFont("Helvetica-Oblique", 9)
-                c.drawCentredString((cxm+cxx)/2, y_curr - 50, cr['CT'])
+                c.drawCentredString((cxm+cxx)/2, y_curr - 50, str(c_text))
                 
             y_curr -= ROW_HEIGHT_SPACING
         c.showPage()
+        
     c.save()
     buffer.seek(0)
     return buffer
@@ -212,13 +207,19 @@ if 'sheets_data' in st.session_state:
     tabs = st.tabs(["📄 CTR Table Editor", "🖼️ Symbols Setup"])
     
     with tabs[0]:
-        sel = st.selectbox("Select Sheet", range(len(st.session_state.sheets_data)))
+        sel = st.selectbox("Select Sheet", range(len(st.session_state.sheets_data)), format_func=lambda x: f"Sheet {st.session_state.sheets_data[x]['meta']['sheet']}")
         df_p = pd.DataFrame(st.session_state.sheets_data[sel]['rows'])
         edited_df = st.data_editor(df_p, num_rows="dynamic", use_container_width=True)
         st.session_state.sheets_data[sel]['rows'] = edited_df.to_dict('records')
         
-        sig_setup = {"prep": "JE/SIG", "chk1": "SSE/SIG", "chk2": "ASTE", "app": "DSTE"}
+        col1, col2, col3, col4 = st.columns(4)
+        sig_setup = {
+            "prep": col1.text_input("Prepared By", "JE/SIG"),
+            "chk1": col2.text_input("Checked By (1)", "SSE/SIG"),
+            "chk2": col3.text_input("Checked By (2)", "ASTE"),
+            "app": col4.text_input("Approved By", "DSTE")
+        }
         
         if st.button("🚀 Generate PDF"):
             pdf = process_multi_sheet_pdf(st.session_state.sheets_data, sig_setup, symbol_config)
-            st.download_button("📥 Download PDF", pdf, "CTR_Official.pdf")
+            st.download_button("📥 Download PDF", pdf, "CTR_Official_Drawing.pdf", "application/pdf")
