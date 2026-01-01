@@ -41,7 +41,7 @@ with st.sidebar.expander("✒️ Signature Setup"):
         "app": st.text_input("DSTE", "DSTE")
     }
 
-# --- ADVANCED CABLE PARSING LOGIC ---
+# --- REWRITTEN CABLE-AWARE PARSING LOGIC ---
 def parse_multi_sheet_txt(raw_text):
     sheets_data = []
     current_meta = {"sheet": 1, "station": "", "location": "", "sip": "", "heading": "TERMINAL CHART"}
@@ -51,6 +51,7 @@ def parse_multi_sheet_txt(raw_text):
         line = line.strip()
         if not line: continue
         
+        # Meta Data Parsing
         if line.upper().startswith("SHEET:"):
             if current_rows:
                 sheets_data.append({"meta": current_meta.copy(), "rows": current_rows})
@@ -62,6 +63,7 @@ def parse_multi_sheet_txt(raw_text):
         elif line.upper().startswith("SIP:"): current_meta["sip"] = line.split(":", 1)[1].strip()
         elif line.upper().startswith("HEADING:"): current_meta["heading"] = line.split(":", 1)[1].strip()
         else:
+            # Row Parsing with strict Cable Detail Mapping
             parts = [p.strip() for p in line.split(',')]
             if len(parts) >= 2:
                 rid = parts[0].upper()
@@ -69,14 +71,20 @@ def parse_multi_sheet_txt(raw_text):
                     part = parts[i]
                     pattern = r'([^,\[]+)\[\s*(\d+)\s+[tT][oO]\s+(\d+)\s*\]'
                     match = re.search(pattern, part)
+                    
                     if match:
                         func_text = match.group(1).strip().upper()
                         start, end = int(match.group(2)), int(match.group(3))
                         
-                        # LOGIC: Link cable detail ONLY to the preceding function group
+                        # Find the cable detail belonging specifically to this function group
                         cable_detail = ""
-                        if i+1 < len(parts) and "[" not in parts[i+1]:
-                            cable_detail = parts[i+1]
+                        # Search forward until we hit another function group or end of parts
+                        for j in range(i + 1, len(parts)):
+                            if "[" in parts[j]: 
+                                break # Found next function, stop looking for cable
+                            if parts[j]: # Non-empty part that isn't a function must be a cable detail
+                                cable_detail = parts[j]
+                                break
                         
                         for t_num in range(start, end + 1):
                             current_rows.append({
@@ -87,7 +95,7 @@ def parse_multi_sheet_txt(raw_text):
     if current_rows: sheets_data.append({"meta": current_meta, "rows": current_rows})
     return sheets_data
 
-# --- DRAWING HELPERS ---
+# --- PDF DRAWING LOGIC ---
 def draw_terminal_symbol(c, x, y):
     c.setLineWidth(1)
     c.line(x-3, y, x-3, y+40)
@@ -100,10 +108,12 @@ def draw_page_template(c, width, height, footer_values, sheet_num, page_heading)
     c.rect(PAGE_MARGIN, PAGE_MARGIN, width - (2 * PAGE_MARGIN), height - (2 * PAGE_MARGIN))
     c.setFont("Helvetica-Bold", 16)
     c.drawCentredString(width / 2, height - 60, page_heading.upper())
+    
     footer_y = PAGE_MARGIN + 60
     c.line(PAGE_MARGIN, footer_y, width - PAGE_MARGIN, footer_y)
     total_footer_w = width - (2 * PAGE_MARGIN)
     info_x = PAGE_MARGIN + (total_footer_w / 15)
+    
     headers = ["PREPARED BY", "CHECKED BY", "CHECKED BY", "APPROVED BY", "LOCATION NO", "STATION", "SIP", "SHEET"]
     box_w = (total_footer_w - info_x) / 7
     for i in range(8):
@@ -173,24 +183,25 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
                     c.setFont("Helvetica-Bold", 10)
                     c.drawCentredString((xm+xx)/2, y_curr+60, fr['FN'])
             
-            # 3. INDEPENDENT CABLE BRACKETS
+            # 3. CORRECT MULTIPLE CABLE BRACKETS
             cable_groups = group.groupby(['Cable Detail', (group['Cable Detail'] != group['Cable Detail'].shift()).cumsum()]).agg(
                 {'Terminal Number': ['min', 'max'], 'Cable Detail': 'first'}
             ).reset_index(drop=True)
-            cable_groups.columns = ['CS', 'CE', 'CT']
+            cable_groups.columns = ['StartTerm', 'EndTerm', 'CableText']
 
             for _, cr in cable_groups.iterrows():
-                if not cr['CT']: continue
-                csi = group.index[group['Terminal Number'] == cr['CS']][0]
-                cei = group.index[group['Terminal Number'] == cr['CE']][0]
-                cxm, cxx = start_x + (csi * FIXED_GAP), start_x + (cei * FIXED_GAP)
+                if not cr['CableText']: continue
+                
+                c_start_idx = group.index[group['Terminal Number'] == cr['StartTerm']][0]
+                c_end_idx = group.index[group['Terminal Number'] == cr['EndTerm']][0]
+                cxm, cxx = start_x + (c_start_idx * FIXED_GAP), start_x + (c_end_idx * FIXED_GAP)
                 
                 c.setLineWidth(0.8)
                 c.line(cxm-5, y_curr-35, cxx+5, y_curr-35)
                 c.line(cxm-5, y_curr-35, cxm-5, y_curr-30)
                 c.line(cxx+5, y_curr-35, cxx+5, y_curr-30)
                 c.setFont("Helvetica-Oblique", 9)
-                c.drawCentredString((cxm+cxx)/2, y_curr-50, cr['CT'])
+                c.drawCentredString((cxm+cxx)/2, y_curr-50, cr['CableText'])
                 
             y_curr -= ROW_HEIGHT_SPACING
         c.showPage()
@@ -208,7 +219,8 @@ if uploaded_file:
 if 'sheets_data' in st.session_state:
     tabs = st.tabs(["📄 Editor", "🖼️ Symbols"])
     with tabs[0]:
-        sel = st.selectbox("Select Sheet", range(len(st.session_state.sheets_data)))
+        sel = st.selectbox("Select Sheet", range(len(st.session_state.sheets_data)), 
+                           format_func=lambda i: f"Sheet {st.session_state.sheets_data[i]['meta']['sheet']}")
         df = pd.DataFrame(st.session_state.sheets_data[sel]['rows'])
         edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
         st.session_state.sheets_data[sel]['rows'] = edited_df.to_dict('records')
