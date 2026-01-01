@@ -66,7 +66,8 @@ def parse_multi_sheet_txt(raw_text):
             if len(parts) >= 2:
                 rid = parts[0].upper()
                 middle_content = ",".join(parts[1:])
-                cable_detail = parts[-1] if any(x in parts[-1].upper() for x in ["RR", "TO", "CABLE"]) else ""
+                # Correctly identify cable detail if it exists at the end
+                cable_detail = parts[-1] if any(x in parts[-1].upper() for x in ["RR", "TO", "CABLE", "GTY"]) else ""
                 
                 pattern = r'([^,\[]+)\[\s*(\d+)\s+to\s+(\d+)\s*\]'
                 matches = re.findall(pattern, middle_content, re.I)
@@ -133,21 +134,25 @@ def process_multi_sheet_pdf(sheets_list, sig_data, symbols):
             
             group = group.reset_index(drop=True)
             
-            # --- DRAWING LOGIC ---
+            # --- TERMINAL DRAWING LOOP ---
             for idx, row in group.iterrows():
                 tx = start_x + (idx * FIXED_GAP)
-                # SKIP TERMINAL SYMBOL DRAWING IF IT IS A CHARGER
-                if "CHGR" not in row['Function'].upper():
+                func_upper = row['Function'].upper()
+                
+                # If it's a special symbol (CHGR), skip both terminal links AND numbers
+                if "CHGR" not in func_upper:
                     draw_terminal_symbol(c, tx, y_curr)
+                    c.setFont("Helvetica", 8)
+                    c.drawCentredString(tx, y_curr - 15, row['Terminal Number'])
                 
-                c.setFont("Helvetica", 8)
-                c.drawCentredString(tx, y_curr - 15, row['Terminal Number'])
-                
-            # --- OVERLAY COMPONENT SYMBOLS ---
+            # --- COMPONENT BRACKETS & SYMBOLS ---
             func_groups = group.groupby(['Function', (group['Function'] != group['Function'].shift()).cumsum()]).agg(
                 {'Terminal Number': ['min', 'max'], 'Function': 'first'}
             ).reset_index(drop=True)
             func_groups.columns = ['Start', 'End', 'Function']
+            
+            row_min_x = start_x
+            row_max_x = start_x
             
             for _, f_row in func_groups.iterrows():
                 start_idx = group.index[group['Terminal Number'] == f_row['Start']][0]
@@ -155,27 +160,35 @@ def process_multi_sheet_pdf(sheets_list, sig_data, symbols):
                 
                 x_min = start_x + (start_idx * FIXED_GAP)
                 x_max = start_x + (end_idx * FIXED_GAP)
+                row_max_x = max(row_max_x, x_max)
                 
                 func_name = f_row['Function'].upper()
                 
                 if "CHGR" in func_name and symbols.get("CHARGER"):
-                    # Only Draw Symbol, NO TERMINAL LINKS OR BRACKETS
+                    # Only Draw Symbol: No Terminal symbols, no terminal numbers, no brackets
                     img = symbols["CHARGER"]
-                    # Centered Image over the entire range
-                    img_w, img_h = 45, 45
-                    c.drawInlineImage(img, (x_min + x_max)/2 - img_w/2, y_curr, width=img_w, height=img_h)
+                    img_w, img_h = 50, 50
+                    c.drawInlineImage(img, (x_min + x_max)/2 - img_w/2, y_curr - 5, width=img_w, height=img_h)
                 else:
-                    # Draw Brackets and Text for everything else
+                    # Draw Brackets and Text for standard functions
                     c.setLineWidth(0.8)
                     c.line(x_min - 5, y_curr + 50, x_max + 5, y_curr + 50)
                     c.line(x_min - 5, y_curr + 50, x_min - 5, y_curr + 45)
                     c.line(x_max + 5, y_curr + 50, x_max + 5, y_curr + 45)
                     c.setFont("Helvetica-Bold", 10)
                     c.drawCentredString((x_min + x_max)/2, y_curr + 60, func_name)
-                    
-            if group['Cable Detail'].iloc[0]:
+            
+            # --- CABLE DETAIL BRACKET ---
+            cable_txt = group['Cable Detail'].iloc[0]
+            if cable_txt:
+                c.setLineWidth(0.8)
+                # Drawing the bottom bracket spanning the entire row for cable details
+                c.line(row_min_x - 5, y_curr - 30, row_max_x + 5, y_curr - 30)
+                c.line(row_min_x - 5, y_curr - 30, row_min_x - 5, y_curr - 25)
+                c.line(row_max_x + 5, y_curr - 30, row_max_x + 5, y_curr - 25)
+                
                 c.setFont("Helvetica-Oblique", 9)
-                c.drawCentredString(width/2, y_curr - 40, group['Cable Detail'].iloc[0])
+                c.drawCentredString((row_min_x + row_max_x)/2, y_curr - 45, cable_txt)
             
             y_curr -= ROW_HEIGHT_SPACING
         c.showPage()
@@ -208,4 +221,4 @@ if 'sheets_data' in st.session_state:
             st.download_button("📥 Download Official CTR PDF", pdf_file, f"CTR_Output.pdf", "application/pdf")
 
     with tabs[1]:
-        st.info("Upload component symbols. Use 'CHGR' in your function name to trigger the Charger symbol and hide terminal links.")
+        st.info("Upload component symbols. Keywords like 'CHGR' will hide terminal symbols and numbers.")
