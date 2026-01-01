@@ -41,7 +41,7 @@ with st.sidebar.expander("✒️ Signature Setup"):
         "app": st.text_input("DSTE", "DSTE")
     }
 
-# --- IMPROVED PARSING LOGIC ---
+# --- ADVANCED PARSING LOGIC ---
 def parse_multi_sheet_txt(raw_text):
     sheets_data = []
     current_meta = {"sheet": 1, "station": "", "location": "", "sip": "", "heading": "TERMINAL CHART"}
@@ -51,6 +51,7 @@ def parse_multi_sheet_txt(raw_text):
         line = line.strip()
         if not line: continue
         
+        # Meta Data
         if line.upper().startswith("SHEET:"):
             if current_rows:
                 sheets_data.append({"meta": current_meta.copy(), "rows": current_rows})
@@ -62,20 +63,20 @@ def parse_multi_sheet_txt(raw_text):
         elif line.upper().startswith("SIP:"): current_meta["sip"] = line.split(":", 1)[1].strip()
         elif line.upper().startswith("HEADING:"): current_meta["heading"] = line.split(":", 1)[1].strip()
         else:
-            # Handle row parsing with multiple cables
+            # Row Data Parsing
             parts = [p.strip() for p in line.split(',')]
             if len(parts) >= 2:
                 rid = parts[0].upper()
-                # Track latest cable to apply correctly
                 for i in range(1, len(parts)):
                     part = parts[i]
+                    # Regex to find Function and Range
                     pattern = r'([^,\[]+)\[\s*(\d+)\s+[tT][oO]\s+(\d+)\s*\]'
                     match = re.search(pattern, part)
                     if match:
                         func_text = match.group(1).strip().upper()
                         start, end = int(match.group(2)), int(match.group(3))
                         
-                        # Peek at next part to see if it's a cable detail
+                        # Peek ahead to find the specific cable detail for THIS group
                         cable_detail = ""
                         if i+1 < len(parts) and "[" not in parts[i+1]:
                             cable_detail = parts[i+1]
@@ -89,6 +90,7 @@ def parse_multi_sheet_txt(raw_text):
     if current_rows: sheets_data.append({"meta": current_meta, "rows": current_rows})
     return sheets_data
 
+# --- DRAWING HELPERS ---
 def draw_terminal_symbol(c, x, y):
     c.setLineWidth(1)
     c.line(x-3, y, x-3, y+40)
@@ -139,21 +141,23 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
         start_x = draw_page_template(c, width, height, f_vals, meta['sheet'], meta['heading'])
         y_curr = height - 180
         
+        # Group by Row (A, B, C)
         for rid, group in df.groupby("Row ID", sort=False):
             c.setFont("Helvetica-Bold", 12)
             c.drawString(PAGE_MARGIN + 30, y_curr + 15, rid)
             group = group.reset_index(drop=True)
             
-            # Draw Terminals
+            # 1. Individual Terminal Elements
             for idx, row in group.iterrows():
                 tx = start_x + (idx * FIXED_GAP)
                 s_img, _ = get_special_info(row['Function'])
+                # Only draw links and numbers if it is NOT a special symbol
                 if not s_img:
                     draw_terminal_symbol(c, tx, y_curr)
                     c.setFont("Helvetica", 8)
                     c.drawCentredString(tx, y_curr - 15, row['Terminal Number'])
                 
-            # Brackets & Special Symbols
+            # 2. Function Grouping (Brackets / Symbols)
             func_groups = group.groupby(['Function', (group['Function'] != group['Function'].shift()).cumsum()]).agg(
                 {'Terminal Number': ['min', 'max'], 'Function': 'first'}
             ).reset_index(drop=True)
@@ -166,11 +170,12 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
                 
                 s_img, d_label = get_special_info(f_row['F_Name'])
                 if s_img:
-                    # Clean look: No brackets, no terminals, just symbol and cleaned name
+                    # Draw Special PNG and Cleaned Text Label
                     c.drawInlineImage(s_img, (xm+xx)/2 - 25, y_curr - 5, width=50, height=50)
                     c.setFont("Helvetica-Bold", 10)
                     c.drawCentredString((xm+xx)/2, y_curr + 55, d_label)
                 else:
+                    # Draw Standard Top Bracket and Name
                     c.setLineWidth(0.8)
                     c.line(xm-5, y_curr+50, xx+5, y_curr+50)
                     c.line(xm-5, y_curr+50, xm-5, y_curr+45)
@@ -178,7 +183,7 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
                     c.setFont("Helvetica-Bold", 10)
                     c.drawCentredString((xm+xx)/2, y_curr+60, f_row['F_Name'])
             
-            # Cable Detail Brackets
+            # 3. Cable Detail Grouping (Bottom Brackets)
             cable_groups = group.groupby(['Cable Detail', (group['Cable Detail'] != group['Cable Detail'].shift()).cumsum()]).agg(
                 {'Terminal Number': ['min', 'max'], 'Cable Detail': 'first'}
             ).reset_index(drop=True)
@@ -213,7 +218,7 @@ if uploaded_file:
 if 'sheets_data' in st.session_state:
     tabs = st.tabs(["📄 Editor", "🖼️ Symbols"])
     with tabs[0]:
-        sel = st.selectbox("Select Sheet", range(len(st.session_state.sheets_data)), format_func=lambda i: f"Sheet {st.session_state.sheets_data[i]['meta']['sheet']}")
+        sel = st.selectbox("Select Sheet", range(len(st.session_state.sheets_data)))
         df = pd.DataFrame(st.session_state.sheets_data[sel]['rows'])
         edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
         st.session_state.sheets_data[sel]['rows'] = edited_df.to_dict('records')
