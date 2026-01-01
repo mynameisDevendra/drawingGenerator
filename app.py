@@ -117,12 +117,13 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
     width, height = PAGE_SIZE
     c = canvas.Canvas(buffer, pagesize=PAGE_SIZE)
     
-    def get_special_info(func_name):
+    def get_special_info(text):
+        if not text: return None, ""
         for _, data in config.items():
-            if data["key"] in func_name.upper() and data["img"]:
-                clean_name = func_name.upper().replace(data["key"], "").strip()
+            if data["key"] in str(text).upper() and data["img"]:
+                clean_name = str(text).upper().replace(data["key"], "").strip()
                 return data["img"], clean_name
-        return None, func_name
+        return None, str(text)
 
     for sheet in sheets_list:
         meta = sheet['meta']
@@ -133,7 +134,6 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
         y_curr = height - 180
         
         for rid, group in df.groupby("Row ID", sort=False):
-            # Page Overflow Check
             if y_curr < (PAGE_MARGIN + 120):
                 c.showPage()
                 start_x = draw_page_template(c, width, height, f_vals, meta['sheet'], meta['heading'])
@@ -146,13 +146,14 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
             # 1. Terminals
             for idx, row in group.iterrows():
                 tx = start_x + (idx * FIXED_GAP)
-                s_img, _ = get_special_info(str(row['Function']))
+                # Only draw terminal circle if the function is NOT a special symbol
+                s_img, _ = get_special_info(row['Function'])
                 if not s_img:
                     draw_terminal_symbol(c, tx, y_curr)
                     c.setFont("Helvetica", 8)
                     c.drawCentredString(tx, y_curr - 15, str(row['Terminal Number']))
                 
-            # 2. Function Grouping (Upper Brackets) - Grouping by consecutive Function values
+            # 2. Function Grouping (Top)
             func_blocks = group.groupby((group['Function'] != group['Function'].shift()).cumsum())
             for _, block in func_blocks:
                 f_text = block['Function'].iloc[0]
@@ -172,7 +173,7 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
                     c.setFont("Helvetica-Bold", 10)
                     c.drawCentredString((xm+xx)/2, y_curr+60, f_text)
             
-            # 3. Cable Detail Grouping (Bottom Brackets) - Grouping by consecutive Cable Detail values
+            # 3. Cable Detail Grouping (Bottom)
             cable_blocks = group.groupby((group['Cable Detail'] != group['Cable Detail'].shift()).cumsum())
             for _, block in cable_blocks:
                 c_text = block['Cable Detail'].iloc[0]
@@ -181,11 +182,12 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
                 si, ei = block.index[0], block.index[-1]
                 cxm, cxx = start_x + (si * FIXED_GAP), start_x + (ei * FIXED_GAP)
                 
-		s_img, d_label = get_special_info(c_text)
-		if s_img:
-                    c.drawInlineImage(s_img, (cxm+cxx)/2 - 25, y_curr - 5, width=50, height=50)
+                s_img, d_label = get_special_info(c_text)
+                if s_img:
+                    # Draw symbol instead of bracket if keyword matched
+                    c.drawInlineImage(s_img, (cxm+cxx)/2 - 25, y_curr - 85, width=50, height=50)
                     c.setFont("Helvetica-Bold", 9)
-                    c.drawCentredString((cxm+cxx)/2, y_curr + 55, d_label)
+                    c.drawCentredString((cxm+cxx)/2, y_curr - 95, d_label)
                 else:
                     c.setLineWidth(0.8)
                     c.line(cxm-5, y_curr - 35, cxx+5, y_curr - 35)
@@ -213,7 +215,8 @@ if 'sheets_data' in st.session_state:
     tabs = st.tabs(["📄 CTR Table Editor", "🖼️ Symbols Setup"])
     
     with tabs[0]:
-        sel = st.selectbox("Select Sheet", range(len(st.session_state.sheets_data)), format_func=lambda x: f"Sheet {st.session_state.sheets_data[x]['meta']['sheet']}")
+        sel = st.selectbox("Select Sheet", range(len(st.session_state.sheets_data)), 
+                           format_func=lambda x: f"Sheet {st.session_state.sheets_data[x]['meta']['sheet']}")
         df_p = pd.DataFrame(st.session_state.sheets_data[sel]['rows'])
         edited_df = st.data_editor(df_p, num_rows="dynamic", use_container_width=True)
         st.session_state.sheets_data[sel]['rows'] = edited_df.to_dict('records')
