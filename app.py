@@ -33,15 +33,7 @@ symbol_config = {
     "RELAY": {"img": side_uploader("Relay", "RELAY"), "key": "RELAY"}
 }
 
-with st.sidebar.expander("✒️ Signature Setup"):
-    sig_data = {
-        "prep": st.text_input("Prepared", "JE/SIG"),
-        "chk1": st.text_input("SSE", "SSE/SIG"), 
-        "chk2": st.text_input("ASTE", "ASTE"),
-        "app": st.text_input("DSTE", "DSTE")
-    }
-
-# --- REWRITTEN PARSING LOGIC: SEGMENTED CAPTURE ---
+# --- REWRITTEN PARSING LOGIC: LOOKAHEAD-LINKER ---
 def parse_multi_sheet_txt(raw_text):
     sheets_data = []
     current_meta = {"sheet": 1, "station": "", "location": "", "sip": "", "heading": "TERMINAL CHART"}
@@ -51,7 +43,7 @@ def parse_multi_sheet_txt(raw_text):
         line = line.strip()
         if not line: continue
         
-        # Meta Data
+        # Meta Data Parsing
         if line.upper().startswith("SHEET:"):
             if current_rows:
                 sheets_data.append({"meta": current_meta.copy(), "rows": current_rows})
@@ -63,18 +55,14 @@ def parse_multi_sheet_txt(raw_text):
         elif line.upper().startswith("SIP:"): current_meta["sip"] = line.split(":", 1)[1].strip()
         elif line.upper().startswith("HEADING:"): current_meta["heading"] = line.split(":", 1)[1].strip()
         else:
-            # Row Data Parsing
+            # Row Data Parsing 
             parts = [p.strip() for p in line.split(',')]
             if len(parts) >= 2:
                 rid = parts[0].upper()
                 
-                # New Logic: Iterate through all parts and track the most recent function group
-                # to which subsequent cable strings should be attached.
-                temp_func_group = [] 
-                
                 for i in range(1, len(parts)):
                     part = parts[i]
-                    # Check if this part is a function + range: e.g., 12HG [01 to 04]
+                    # Identify Function Range: e.g., 12HG [01 to 04] 
                     pattern = r'([^,\[]+)\[\s*(\d+)\s+[tT][oO]\s+(\d+)\s*\]'
                     match = re.search(pattern, part)
                     
@@ -82,11 +70,11 @@ def parse_multi_sheet_txt(raw_text):
                         func_text = match.group(1).strip().upper()
                         start, end = int(match.group(2)), int(match.group(3))
                         
-                        # Peek ahead: If the next part is NOT a function group, it's the cable for this group
+                        # ALLOTMENT LOGIC: 
+                        # Only use the part immediately following this function as its cable detail
                         cable_detail = ""
-                        if i + 1 < len(parts):
-                            if "[" not in parts[i+1]:
-                                cable_detail = parts[i+1]
+                        if i + 1 < len(parts) and "[" not in parts[i+1]:
+                            cable_detail = parts[i+1]
                         
                         for t_num in range(start, end + 1):
                             current_rows.append({
@@ -143,7 +131,7 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
     for sheet in sheets_list:
         meta = sheet['meta']
         df = pd.DataFrame(sheet['rows'])
-        f_vals = [sig_data['prep'], sig_data['chk1'], sig_data['chk2'], sig_data['app'], meta['location'], meta['station'], meta['sip'], ""]
+        f_vals = [sig_data.get('prep',''), sig_data.get('chk1',''), sig_data.get('chk2',''), sig_data.get('app',''), meta['location'], meta['station'], meta['sip'], ""]
         start_x = draw_page_template(c, width, height, f_vals, meta['sheet'], meta['heading'])
         y_curr = height - 180
         
@@ -152,7 +140,7 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
             c.drawString(PAGE_MARGIN + 30, y_curr + 15, rid)
             group = group.reset_index(drop=True)
             
-            # 1. Terminals
+            # 1. Terminals and suppressions
             for idx, row in group.iterrows():
                 tx = start_x + (idx * FIXED_GAP)
                 s_img, _ = get_special_info(row['Function'])
@@ -184,7 +172,7 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
                     c.setFont("Helvetica-Bold", 10)
                     c.drawCentredString((xm+xx)/2, y_curr+60, fr['FN'])
             
-            # 3. Cable Details - Strictly using the assigned segments
+            # 3. Cable Details - Independent Segments 
             cable_segments = group.groupby(['Cable Detail', (group['Cable Detail'] != group['Cable Detail'].shift()).cumsum()]).agg(
                 {'Terminal Number': ['min', 'max'], 'Cable Detail': 'first'}
             ).reset_index(drop=True)
@@ -211,6 +199,8 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
 # --- MAIN APP ---
 st.title("🚉 CTR Drawing Management System")
 uploaded_file = st.file_uploader("Upload Drawing TXT", type=["txt"])
+
+# Use session state to store data 
 if uploaded_file:
     raw_text = uploaded_file.getvalue().decode("utf-8")
     st.session_state.sheets_data = parse_multi_sheet_txt(raw_text)
@@ -220,9 +210,13 @@ if 'sheets_data' in st.session_state:
     with tabs[0]:
         sel = st.selectbox("Select Sheet", range(len(st.session_state.sheets_data)))
         df_p = pd.DataFrame(st.session_state.sheets_data[sel]['rows'])
-        # VITAL: Check the table here. Cable Details should now be correctly alloted.
+        
+        # TABLE PREVIEW: Verify that Cable Detail is now correctly allotted 
+        st.subheader("Technical Data Editor")
         edited_df = st.data_editor(df_p, num_rows="dynamic", use_container_width=True)
         st.session_state.sheets_data[sel]['rows'] = edited_df.to_dict('records')
+        
         if st.button("🚀 Generate Official PDF"):
-            pdf_file = process_multi_sheet_pdf(st.session_state.sheets_data, sig_data, symbol_config)
+            # Collecting signature setup 
+            pdf_file = process_multi_sheet_pdf(st.session_state.sheets_data, {"prep": "JE/SIG", "chk1": "SSE/SIG", "chk2": "ASTE", "app": "DSTE"}, symbol_config)
             st.download_button("📥 Download PDF", pdf_file, "CTR_Official.pdf")
