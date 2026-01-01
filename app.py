@@ -15,22 +15,22 @@ FIXED_GAP = 33
 PAGE_SIZE = landscape(A3)
 ROW_HEIGHT_SPACING = 150 
 
-# --- SYMBOL UPLOADER HELPER ---
-def side_uploader(label, keyword):
-    st.sidebar.markdown(f"**{label}** (Keyword: `{keyword}`)")
-    uploaded_file = st.sidebar.file_uploader(f"Upload {label} PNG", type=['png', 'jpg', 'jpeg'], key=label)
+# --- SIDEBAR: SYMBOL UPLOADS ---
+st.sidebar.header("🎨 Drawing Symbols")
+
+def side_uploader(label):
+    uploaded_file = st.sidebar.file_uploader(f"Upload {label} (PNG)", type=['png'], key=label)
     if uploaded_file:
-        return Image.open(uploaded_file).convert("RGBA")
+        img = Image.open(uploaded_file).convert("RGBA")
+        return img
     return None
 
-# --- SIDEBAR CONFIG ---
-st.sidebar.header("🎨 Drawing Symbols & Keywords")
 symbol_config = {
-    "CHARGER": {"img": side_uploader("Charger", "CHGR"), "key": "CHGR"},
-    "FUSE": {"img": side_uploader("Fuse", "FUSE"), "key": "FUSE"},
-    "CHOKE": {"img": side_uploader("Choke", "CHK"), "key": "CHK"},
-    "RESISTANCE": {"img": side_uploader("Resistance", "RS"), "key": "RS"},
-    "RELAY": {"img": side_uploader("Relay", "RELAY"), "key": "RELAY"}
+    "FUSE": {"img": side_uploader("Fuse"), "key": "FUSE"},
+    "CHOKE": {"img": side_uploader("Choke"), "key": "CHK"},
+    "CHARGER": {"img": side_uploader("Charger"), "key": "CHGR"},
+    "RESISTANCE": {"img": side_uploader("Resistance"), "key": "RS"},
+    "RELAY": {"img": side_uploader("Relay"), "key": "RELAY"}
 }
 
 # --- REWRITTEN PARSING LOGIC: LOOKAHEAD-LINKER ---
@@ -43,26 +43,26 @@ def parse_multi_sheet_txt(raw_text):
         line = line.strip()
         if not line: continue
         
-        # Meta Data Parsing
-        if line.upper().startswith("SHEET:"):
+        upper_line = line.upper()
+        if upper_line.startswith("SHEET:"):
             if current_rows:
                 sheets_data.append({"meta": current_meta.copy(), "rows": current_rows})
                 current_rows = []
             val = re.search(r'\d+', line)
             if val: current_meta["sheet"] = int(val.group())
-        elif line.upper().startswith("STATION:"): current_meta["station"] = line.split(":", 1)[1].strip()
-        elif line.upper().startswith("LOCATION:"): current_meta["location"] = line.split(":", 1)[1].strip()
-        elif line.upper().startswith("SIP:"): current_meta["sip"] = line.split(":", 1)[1].strip()
-        elif line.upper().startswith("HEADING:"): current_meta["heading"] = line.split(":", 1)[1].strip()
+        elif upper_line.startswith("STATION:"): current_meta["station"] = line.split(":", 1)[1].strip()
+        elif upper_line.startswith("LOCATION:"): current_meta["location"] = line.split(":", 1)[1].strip()
+        elif upper_line.startswith("SIP:"): current_meta["sip"] = line.split(":", 1)[1].strip()
+        elif upper_line.startswith("HEADING:"): current_meta["heading"] = line.split(":", 1)[1].strip()
         else:
-            # Row Data Parsing 
+            # Row Data Parsing
             parts = [p.strip() for p in line.split(',')]
             if len(parts) >= 2:
                 rid = parts[0].upper()
                 
                 for i in range(1, len(parts)):
                     part = parts[i]
-                    # Identify Function Range: e.g., 12HG [01 to 04] 
+                    # Identify Function Range: e.g., 12HG [01 to 04]
                     pattern = r'([^,\[]+)\[\s*(\d+)\s+[tT][oO]\s+(\d+)\s*\]'
                     match = re.search(pattern, part)
                     
@@ -70,8 +70,8 @@ def parse_multi_sheet_txt(raw_text):
                         func_text = match.group(1).strip().upper()
                         start, end = int(match.group(2)), int(match.group(3))
                         
-                        # ALLOTMENT LOGIC: 
-                        # Only use the part immediately following this function as its cable detail
+                        # CABLE GROUPING LOGIC: 
+                        # Use the part immediately following this function as its cable detail
                         cable_detail = ""
                         if i + 1 < len(parts) and "[" not in parts[i+1]:
                             cable_detail = parts[i+1]
@@ -87,7 +87,7 @@ def parse_multi_sheet_txt(raw_text):
     if current_rows: sheets_data.append({"meta": current_meta, "rows": current_rows})
     return sheets_data
 
-# --- DRAWING ENGINE ---
+# --- PDF DRAWING LOGIC ---
 def draw_terminal_symbol(c, x, y):
     c.setLineWidth(1)
     c.line(x-3, y, x-3, y+40)
@@ -100,10 +100,12 @@ def draw_page_template(c, width, height, footer_values, sheet_num, page_heading)
     c.rect(PAGE_MARGIN, PAGE_MARGIN, width - (2 * PAGE_MARGIN), height - (2 * PAGE_MARGIN))
     c.setFont("Helvetica-Bold", 16)
     c.drawCentredString(width / 2, height - 60, page_heading.upper())
+    
     footer_y = PAGE_MARGIN + 60
     c.line(PAGE_MARGIN, footer_y, width - PAGE_MARGIN, footer_y)
     total_footer_w = width - (2 * PAGE_MARGIN)
     info_x = PAGE_MARGIN + (total_footer_w / 15)
+    
     headers = ["PREPARED BY", "CHECKED BY", "CHECKED BY", "APPROVED BY", "LOCATION NO", "STATION", "SIP", "SHEET"]
     box_w = (total_footer_w - info_x) / 7
     for i in range(8):
@@ -131,7 +133,7 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
     for sheet in sheets_list:
         meta = sheet['meta']
         df = pd.DataFrame(sheet['rows'])
-        f_vals = [sig_data.get('prep',''), sig_data.get('chk1',''), sig_data.get('chk2',''), sig_data.get('app',''), meta['location'], meta['station'], meta['sip'], ""]
+        f_vals = [sig_data['prep'], sig_data['chk1'], sig_data['chk2'], sig_data['app'], meta['location'], meta['station'], meta['sip'], ""]
         start_x = draw_page_template(c, width, height, f_vals, meta['sheet'], meta['heading'])
         y_curr = height - 180
         
@@ -140,7 +142,7 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
             c.drawString(PAGE_MARGIN + 30, y_curr + 15, rid)
             group = group.reset_index(drop=True)
             
-            # 1. Terminals and suppressions
+            # 1. Terminals
             for idx, row in group.iterrows():
                 tx = start_x + (idx * FIXED_GAP)
                 s_img, _ = get_special_info(row['Function'])
@@ -149,17 +151,18 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
                     c.setFont("Helvetica", 8)
                     c.drawCentredString(tx, y_curr - 15, row['Terminal Number'])
                 
-            # 2. Function Group Brackets
+            # 2. Function Grouping (Upper Brackets)
             func_groups = group.groupby(['Function', (group['Function'] != group['Function'].shift()).cumsum()]).agg(
                 {'Terminal Number': ['min', 'max'], 'Function': 'first'}
             ).reset_index(drop=True)
-            func_groups.columns = ['ST', 'ET', 'FN']
+            func_groups.columns = ['StartT', 'EndT', 'FText']
             
             for _, fr in func_groups.iterrows():
-                si = group.index[group['Terminal Number'] == fr['ST']][0]
-                ei = group.index[group['Terminal Number'] == fr['ET']][0]
+                si = group.index[group['Terminal Number'] == fr['StartT']][0]
+                ei = group.index[group['Terminal Number'] == fr['EndT']][0]
                 xm, xx = start_x + (si * FIXED_GAP), start_x + (ei * FIXED_GAP)
-                s_img, d_label = get_special_info(fr['FN'])
+                
+                s_img, d_label = get_special_info(fr['FText'])
                 if s_img:
                     c.drawInlineImage(s_img, (xm+xx)/2 - 25, y_curr - 5, width=50, height=50)
                     c.setFont("Helvetica-Bold", 10)
@@ -170,25 +173,26 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
                     c.line(xm-5, y_curr+50, xm-5, y_curr+45)
                     c.line(xx+5, y_curr+50, xx+5, y_curr+45)
                     c.setFont("Helvetica-Bold", 10)
-                    c.drawCentredString((xm+xx)/2, y_curr+60, fr['FN'])
+                    c.drawCentredString((xm+xx)/2, y_curr+60, fr['FText'])
             
-            # 3. Cable Details - Independent Segments 
-            cable_segments = group.groupby(['Cable Detail', (group['Cable Detail'] != group['Cable Detail'].shift()).cumsum()]).agg(
+            # 3. Cable Detail Grouping (Bottom Brackets)
+            cable_groups = group.groupby(['Cable Detail', (group['Cable Detail'] != group['Cable Detail'].shift()).cumsum()]).agg(
                 {'Terminal Number': ['min', 'max'], 'Cable Detail': 'first'}
             ).reset_index(drop=True)
-            cable_segments.columns = ['StartT', 'EndT', 'CText']
+            cable_groups.columns = ['CS', 'CE', 'CT']
 
-            for _, block in cable_segments.iterrows():
-                if not block['CText']: continue
-                csi = group.index[group['Terminal Number'] == block['StartT']][0]
-                cei = group.index[group['Terminal Number'] == block['EndT']][0]
+            for _, cr in cable_groups.iterrows():
+                if not cr['CT']: continue
+                csi = group.index[group['Terminal Number'] == cr['CS']][0]
+                cei = group.index[group['Terminal Number'] == cr['CE']][0]
                 cxm, cxx = start_x + (csi * FIXED_GAP), start_x + (cei * FIXED_GAP)
+                
                 c.setLineWidth(0.8)
-                c.line(cxm-5, y_curr-35, cxx+5, y_curr-35)
-                c.line(cxm-5, y_curr-35, cxm-5, y_curr-30)
-                c.line(cxx+5, y_curr-35, cxx+5, y_curr-30)
+                c.line(cxm-5, y_curr - 35, cxx+5, y_curr - 35)
+                c.line(cxm-5, y_curr - 35, cxm-5, y_curr - 30)
+                c.line(cxx+5, y_curr - 35, cxx+5, y_curr - 30)
                 c.setFont("Helvetica-Oblique", 9)
-                c.drawCentredString((cxm+cxx)/2, y_curr-50, str(block['CText']))
+                c.drawCentredString((cxm+cxx)/2, y_curr - 50, cr['CT'])
                 
             y_curr -= ROW_HEIGHT_SPACING
         c.showPage()
@@ -196,27 +200,25 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
     buffer.seek(0)
     return buffer
 
-# --- MAIN APP ---
+# --- MAIN UI ---
 st.title("🚉 CTR Drawing Management System")
-uploaded_file = st.file_uploader("Upload Drawing TXT", type=["txt"])
 
-# Use session state to store data 
+uploaded_file = st.file_uploader("Upload Drawing TXT", type=["txt"])
 if uploaded_file:
     raw_text = uploaded_file.getvalue().decode("utf-8")
     st.session_state.sheets_data = parse_multi_sheet_txt(raw_text)
 
 if 'sheets_data' in st.session_state:
-    tabs = st.tabs(["📄 Editor", "🖼️ Symbols"])
+    tabs = st.tabs(["📄 CTR Table Editor", "🖼️ Symbols Setup"])
+    
     with tabs[0]:
         sel = st.selectbox("Select Sheet", range(len(st.session_state.sheets_data)))
         df_p = pd.DataFrame(st.session_state.sheets_data[sel]['rows'])
-        
-        # TABLE PREVIEW: Verify that Cable Detail is now correctly allotted 
-        st.subheader("Technical Data Editor")
         edited_df = st.data_editor(df_p, num_rows="dynamic", use_container_width=True)
         st.session_state.sheets_data[sel]['rows'] = edited_df.to_dict('records')
         
-        if st.button("🚀 Generate Official PDF"):
-            # Collecting signature setup 
-            pdf_file = process_multi_sheet_pdf(st.session_state.sheets_data, {"prep": "JE/SIG", "chk1": "SSE/SIG", "chk2": "ASTE", "app": "DSTE"}, symbol_config)
-            st.download_button("📥 Download PDF", pdf_file, "CTR_Official.pdf")
+        sig_setup = {"prep": "JE/SIG", "chk1": "SSE/SIG", "chk2": "ASTE", "app": "DSTE"}
+        
+        if st.button("🚀 Generate PDF"):
+            pdf = process_multi_sheet_pdf(st.session_state.sheets_data, sig_setup, symbol_config)
+            st.download_button("📥 Download PDF", pdf, "CTR_Official.pdf")
