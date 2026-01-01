@@ -66,10 +66,14 @@ def parse_multi_sheet_txt(raw_text):
             if len(parts) >= 2:
                 rid = parts[0].upper()
                 middle_content = ",".join(parts[1:])
-                cable_detail = parts[-1] if any(x in parts[-1].upper() for x in ["RR", "TO", "CABLE", "GTY"]) else ""
-                
+                # Match function and range 
                 pattern = r'([^,\[]+)\[\s*(\d+)\s+to\s+(\d+)\s*\]'
                 matches = re.findall(pattern, middle_content, re.I)
+                
+                cable_detail = ""
+                if any(x in parts[-1].upper() for x in ["RR", "TO", "CABLE", "GTY"]):
+                    cable_detail = parts[-1]
+
                 for match in matches:
                     func_text = match[0].strip().upper()
                     start, end = int(match[1]), int(match[2])
@@ -81,7 +85,6 @@ def parse_multi_sheet_txt(raw_text):
     if current_rows: sheets_data.append({"meta": current_meta, "rows": current_rows})
     return sheets_data
 
-# --- PDF DRAWING HELPERS ---
 def draw_terminal_symbol(c, x, y):
     c.setLineWidth(1)
     c.line(x-3, y, x-3, y+40)
@@ -118,7 +121,6 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
     def get_special_info(func_name):
         for _, data in config.items():
             if data["key"] in func_name.upper() and data["img"]:
-                # Remove the keyword from the name (e.g., 'CHGR 14T' -> '14T')
                 clean_name = func_name.upper().replace(data["key"], "").strip()
                 return data["img"], clean_name
         return None, func_name
@@ -135,17 +137,14 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
             c.drawString(PAGE_MARGIN + 30, y_curr + 15, rid)
             group = group.reset_index(drop=True)
             
-            # --- TERMINAL DRAWING ---
             for idx, row in group.iterrows():
                 tx = start_x + (idx * FIXED_GAP)
-                img, _ = get_special_info(row['Function'])
-                # Only draw terminal link and number if NOT a special symbol
-                if not img:
+                special_img, _ = get_special_info(row['Function'])
+                if not special_img:
                     draw_terminal_symbol(c, tx, y_curr)
                     c.setFont("Helvetica", 8)
                     c.drawCentredString(tx, y_curr - 15, row['Terminal Number'])
                 
-            # --- OVERLAY SYMBOLS & LABELS ---
             func_groups = group.groupby(['Function', (group['Function'] != group['Function'].shift()).cumsum()]).agg(
                 {'Terminal Number': ['min', 'max'], 'Function': 'first'}
             ).reset_index(drop=True)
@@ -161,13 +160,12 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
                 special_img, display_name = get_special_info(f_row['Function'])
                 
                 if special_img:
-                    # DRAW IMAGE & CLEAN NAME (No Brackets, No Numbers)
+                    # FIXED PLACEMENT: Centered on the terminal line y_curr
                     img_w, img_h = 50, 50
                     c.drawInlineImage(special_img, (x_min + x_max)/2 - img_w/2, y_curr - 5, width=img_w, height=img_h)
                     c.setFont("Helvetica-Bold", 10)
                     c.drawCentredString((x_min + x_max)/2, y_curr + 55, display_name)
                 else:
-                    # DRAW STANDARD BRACKETS & FULL NAME
                     c.setLineWidth(0.8)
                     c.line(x_min - 5, y_curr + 50, x_max + 5, y_curr + 50)
                     c.line(x_min - 5, y_curr + 50, x_min - 5, y_curr + 45)
@@ -175,7 +173,6 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
                     c.setFont("Helvetica-Bold", 10)
                     c.drawCentredString((x_min + x_max)/2, y_curr + 60, f_row['Function'])
             
-            # --- CABLE DETAIL BRACKET ---
             cable_txt = group['Cable Detail'].iloc[0]
             if cable_txt:
                 c.setLineWidth(0.8)
