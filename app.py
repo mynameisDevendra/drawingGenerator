@@ -41,7 +41,7 @@ with st.sidebar.expander("✒️ Signature Setup"):
         "app": st.text_input("DSTE", "DSTE")
     }
 
-# --- IMPROVED PARSING LOGIC ---
+# --- REWRITTEN PARSING LOGIC: SEGMENTED CAPTURE ---
 def parse_multi_sheet_txt(raw_text):
     sheets_data = []
     current_meta = {"sheet": 1, "station": "", "location": "", "sip": "", "heading": "TERMINAL CHART"}
@@ -51,47 +51,55 @@ def parse_multi_sheet_txt(raw_text):
         line = line.strip()
         if not line: continue
         
-        upper_line = line.upper()
-        if upper_line.startswith("SHEET:"):
+        # Meta Data
+        if line.upper().startswith("SHEET:"):
             if current_rows:
                 sheets_data.append({"meta": current_meta.copy(), "rows": current_rows})
                 current_rows = []
             val = re.search(r'\d+', line)
             if val: current_meta["sheet"] = int(val.group())
-        elif upper_line.startswith("STATION:"): current_meta["station"] = line.split(":", 1)[1].strip()
-        elif upper_line.startswith("LOCATION:"): current_meta["location"] = line.split(":", 1)[1].strip()
-        elif upper_line.startswith("SIP:"): current_meta["sip"] = line.split(":", 1)[1].strip()
-        elif upper_line.startswith("HEADING:"): current_meta["heading"] = line.split(":", 1)[1].strip()
+        elif line.upper().startswith("STATION:"): current_meta["station"] = line.split(":", 1)[1].strip()
+        elif line.upper().startswith("LOCATION:"): current_meta["location"] = line.split(":", 1)[1].strip()
+        elif line.upper().startswith("SIP:"): current_meta["sip"] = line.split(":", 1)[1].strip()
+        elif line.upper().startswith("HEADING:"): current_meta["heading"] = line.split(":", 1)[1].strip()
         else:
+            # Row Data Parsing
             parts = [p.strip() for p in line.split(',')]
             if len(parts) >= 2:
                 rid = parts[0].upper()
-                # Track latest cable to apply correctly
+                
+                # New Logic: Iterate through all parts and track the most recent function group
+                # to which subsequent cable strings should be attached.
+                temp_func_group = [] 
+                
                 for i in range(1, len(parts)):
                     part = parts[i]
+                    # Check if this part is a function + range: e.g., 12HG [01 to 04]
                     pattern = r'([^,\[]+)\[\s*(\d+)\s+[tT][oO]\s+(\d+)\s*\]'
                     match = re.search(pattern, part)
+                    
                     if match:
                         func_text = match.group(1).strip().upper()
                         start, end = int(match.group(2)), int(match.group(3))
                         
-                        # Find the cable detail following THIS function group
+                        # Peek ahead: If the next part is NOT a function group, it's the cable for this group
                         cable_detail = ""
-                        for j in range(i + 1, len(parts)):
-                            if "[" in parts[j]: break # Found next function
-                            if parts[j]: 
-                                cable_detail = parts[j] # Found cable detail
-                                break
+                        if i + 1 < len(parts):
+                            if "[" not in parts[i+1]:
+                                cable_detail = parts[i+1]
                         
                         for t_num in range(start, end + 1):
                             current_rows.append({
-                                "Row ID": rid, "Function": func_text, 
+                                "Row ID": rid, 
+                                "Function": func_text, 
                                 "Terminal Number": str(t_num).zfill(2), 
                                 "Cable Detail": cable_detail
                             })
+                            
     if current_rows: sheets_data.append({"meta": current_meta, "rows": current_rows})
     return sheets_data
 
+# --- DRAWING ENGINE ---
 def draw_terminal_symbol(c, x, y):
     c.setLineWidth(1)
     c.line(x-3, y, x-3, y+40)
@@ -144,7 +152,7 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
             c.drawString(PAGE_MARGIN + 30, y_curr + 15, rid)
             group = group.reset_index(drop=True)
             
-            # 1. Individual Terminal Elements
+            # 1. Terminals
             for idx, row in group.iterrows():
                 tx = start_x + (idx * FIXED_GAP)
                 s_img, _ = get_special_info(row['Function'])
@@ -153,18 +161,17 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
                     c.setFont("Helvetica", 8)
                     c.drawCentredString(tx, y_curr - 15, row['Terminal Number'])
                 
-            # 2. Function Grouping (Top Brackets)
+            # 2. Function Group Brackets
             func_groups = group.groupby(['Function', (group['Function'] != group['Function'].shift()).cumsum()]).agg(
                 {'Terminal Number': ['min', 'max'], 'Function': 'first'}
             ).reset_index(drop=True)
-            func_groups.columns = ['StartT', 'EndT', 'FText']
+            func_groups.columns = ['ST', 'ET', 'FN']
             
             for _, fr in func_groups.iterrows():
-                si = group.index[group['Terminal Number'] == fr['StartT']][0]
-                ei = group.index[group['Terminal Number'] == fr['EndT']][0]
+                si = group.index[group['Terminal Number'] == fr['ST']][0]
+                ei = group.index[group['Terminal Number'] == fr['ET']][0]
                 xm, xx = start_x + (si * FIXED_GAP), start_x + (ei * FIXED_GAP)
-                
-                s_img, d_label = get_special_info(fr['FText'])
+                s_img, d_label = get_special_info(fr['FN'])
                 if s_img:
                     c.drawInlineImage(s_img, (xm+xx)/2 - 25, y_curr - 5, width=50, height=50)
                     c.setFont("Helvetica-Bold", 10)
@@ -175,29 +182,25 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
                     c.line(xm-5, y_curr+50, xm-5, y_curr+45)
                     c.line(xx+5, y_curr+50, xx+5, y_curr+45)
                     c.setFont("Helvetica-Bold", 10)
-                    c.drawCentredString((xm+xx)/2, y_curr+60, fr['FText'])
+                    c.drawCentredString((xm+xx)/2, y_curr+60, fr['FN'])
             
-            # 3. INDEPENDENT CABLE BRACKETS (Bottom Brackets)
-            # This logic specifically skips empty strings to prevent wrong grouping
-            cable_blocks = group.groupby(['Cable Detail', (group['Cable Detail'] != group['Cable Detail'].shift()).cumsum()]).agg(
+            # 3. Cable Details - Strictly using the assigned segments
+            cable_segments = group.groupby(['Cable Detail', (group['Cable Detail'] != group['Cable Detail'].shift()).cumsum()]).agg(
                 {'Terminal Number': ['min', 'max'], 'Cable Detail': 'first'}
             ).reset_index(drop=True)
-            cable_blocks.columns = ['StartC', 'EndC', 'TextC']
+            cable_segments.columns = ['StartT', 'EndT', 'CText']
 
-            for _, block in cable_blocks.iterrows():
-                if not block['TextC']: continue # SKIP if there is no cable detail text
-                
-                csi = group.index[group['Terminal Number'] == block['StartC']][0]
-                cei = group.index[group['Terminal Number'] == block['EndC']][0]
+            for _, block in cable_segments.iterrows():
+                if not block['CText']: continue
+                csi = group.index[group['Terminal Number'] == block['StartT']][0]
+                cei = group.index[group['Terminal Number'] == block['EndT']][0]
                 cxm, cxx = start_x + (csi * FIXED_GAP), start_x + (cei * FIXED_GAP)
-                
                 c.setLineWidth(0.8)
                 c.line(cxm-5, y_curr-35, cxx+5, y_curr-35)
                 c.line(cxm-5, y_curr-35, cxm-5, y_curr-30)
                 c.line(cxx+5, y_curr-35, cxx+5, y_curr-30)
-                
                 c.setFont("Helvetica-Oblique", 9)
-                c.drawCentredString((cxm+cxx)/2, y_curr-50, str(block['TextC']))
+                c.drawCentredString((cxm+cxx)/2, y_curr-50, str(block['CText']))
                 
             y_curr -= ROW_HEIGHT_SPACING
         c.showPage()
@@ -217,8 +220,9 @@ if 'sheets_data' in st.session_state:
     with tabs[0]:
         sel = st.selectbox("Select Sheet", range(len(st.session_state.sheets_data)))
         df_p = pd.DataFrame(st.session_state.sheets_data[sel]['rows'])
+        # VITAL: Check the table here. Cable Details should now be correctly alloted.
         edited_df = st.data_editor(df_p, num_rows="dynamic", use_container_width=True)
         st.session_state.sheets_data[sel]['rows'] = edited_df.to_dict('records')
-        if st.button("🚀 Generate Final PDF"):
+        if st.button("🚀 Generate Official PDF"):
             pdf_file = process_multi_sheet_pdf(st.session_state.sheets_data, sig_data, symbol_config)
-            st.download_button("📥 Download Official CTR PDF", pdf_file, "CTR_Official.pdf", "application/pdf")
+            st.download_button("📥 Download PDF", pdf_file, "CTR_Official.pdf")
