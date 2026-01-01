@@ -41,7 +41,7 @@ with st.sidebar.expander("✒️ Signature Setup"):
         "app": st.text_input("DSTE", "DSTE")
     }
 
-# --- REWRITTEN PARSING LOGIC: CABLE & FUNCTION AWARE ---
+# --- IMPROVED PARSING LOGIC ---
 def parse_multi_sheet_txt(raw_text):
     sheets_data = []
     current_meta = {"sheet": 1, "station": "", "location": "", "sip": "", "heading": "TERMINAL CHART"}
@@ -66,7 +66,7 @@ def parse_multi_sheet_txt(raw_text):
             parts = [p.strip() for p in line.split(',')]
             if len(parts) >= 2:
                 rid = parts[0].upper()
-                # Process each part to map cable detail strictly to the group it follows
+                # Track latest cable to apply correctly
                 for i in range(1, len(parts)):
                     part = parts[i]
                     pattern = r'([^,\[]+)\[\s*(\d+)\s+[tT][oO]\s+(\d+)\s*\]'
@@ -75,10 +75,13 @@ def parse_multi_sheet_txt(raw_text):
                         func_text = match.group(1).strip().upper()
                         start, end = int(match.group(2)), int(match.group(3))
                         
-                        # Look ahead for cable detail part
+                        # Find the cable detail following THIS function group
                         cable_detail = ""
-                        if i+1 < len(parts) and "[" not in parts[i+1]:
-                            cable_detail = parts[i+1]
+                        for j in range(i + 1, len(parts)):
+                            if "[" in parts[j]: break # Found next function
+                            if parts[j]: 
+                                cable_detail = parts[j] # Found cable detail
+                                break
                         
                         for t_num in range(start, end + 1):
                             current_rows.append({
@@ -89,7 +92,6 @@ def parse_multi_sheet_txt(raw_text):
     if current_rows: sheets_data.append({"meta": current_meta, "rows": current_rows})
     return sheets_data
 
-# --- DRAWING HELPERS ---
 def draw_terminal_symbol(c, x, y):
     c.setLineWidth(1)
     c.line(x-3, y, x-3, y+40)
@@ -142,7 +144,7 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
             c.drawString(PAGE_MARGIN + 30, y_curr + 15, rid)
             group = group.reset_index(drop=True)
             
-            # 1. Terminals
+            # 1. Individual Terminal Elements
             for idx, row in group.iterrows():
                 tx = start_x + (idx * FIXED_GAP)
                 s_img, _ = get_special_info(row['Function'])
@@ -151,7 +153,7 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
                     c.setFont("Helvetica", 8)
                     c.drawCentredString(tx, y_curr - 15, row['Terminal Number'])
                 
-            # 2. Function Groups (Upper Brackets)
+            # 2. Function Grouping (Top Brackets)
             func_groups = group.groupby(['Function', (group['Function'] != group['Function'].shift()).cumsum()]).agg(
                 {'Terminal Number': ['min', 'max'], 'Function': 'first'}
             ).reset_index(drop=True)
@@ -175,24 +177,27 @@ def process_multi_sheet_pdf(sheets_list, sig_data, config):
                     c.setFont("Helvetica-Bold", 10)
                     c.drawCentredString((xm+xx)/2, y_curr+60, fr['FText'])
             
-            # 3. Cable Details (Lower Brackets) - FIXED SEGMENTATION
-            cable_groups = group.groupby(['Cable Detail', (group['Cable Detail'] != group['Cable Detail'].shift()).cumsum()]).agg(
+            # 3. INDEPENDENT CABLE BRACKETS (Bottom Brackets)
+            # This logic specifically skips empty strings to prevent wrong grouping
+            cable_blocks = group.groupby(['Cable Detail', (group['Cable Detail'] != group['Cable Detail'].shift()).cumsum()]).agg(
                 {'Terminal Number': ['min', 'max'], 'Cable Detail': 'first'}
             ).reset_index(drop=True)
-            cable_groups.columns = ['CS', 'CE', 'CT']
+            cable_blocks.columns = ['StartC', 'EndC', 'TextC']
 
-            for _, cr in cable_groups.iterrows():
-                if not cr['CT']: continue
-                csi = group.index[group['Terminal Number'] == cr['CS']][0]
-                cei = group.index[group['Terminal Number'] == cr['CE']][0]
+            for _, block in cable_blocks.iterrows():
+                if not block['TextC']: continue # SKIP if there is no cable detail text
+                
+                csi = group.index[group['Terminal Number'] == block['StartC']][0]
+                cei = group.index[group['Terminal Number'] == block['EndC']][0]
                 cxm, cxx = start_x + (csi * FIXED_GAP), start_x + (cei * FIXED_GAP)
                 
                 c.setLineWidth(0.8)
                 c.line(cxm-5, y_curr-35, cxx+5, y_curr-35)
                 c.line(cxm-5, y_curr-35, cxm-5, y_curr-30)
                 c.line(cxx+5, y_curr-35, cxx+5, y_curr-30)
+                
                 c.setFont("Helvetica-Oblique", 9)
-                c.drawCentredString((cxm+cxx)/2, y_curr-50, cr['CT'])
+                c.drawCentredString((cxm+cxx)/2, y_curr-50, str(block['TextC']))
                 
             y_curr -= ROW_HEIGHT_SPACING
         c.showPage()
