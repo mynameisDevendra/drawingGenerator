@@ -51,7 +51,6 @@ def parse_multi_sheet_txt(raw_text):
         if not line: continue
         upper_line = line.upper()
         
-        # Meta Data Parsing 
         if upper_line.startswith("SHEET:"):
             if current_rows:
                 sheets_data.append({"meta": current_meta.copy(), "rows": current_rows})
@@ -63,11 +62,9 @@ def parse_multi_sheet_txt(raw_text):
         elif upper_line.startswith("SIP:"): current_meta["sip"] = line.split(":", 1)[1].strip()
         elif upper_line.startswith("HEADING:"): current_meta["heading"] = line.split(":", 1)[1].strip()
         else:
-            # Row Parsing Logic 
             parts = [p.strip() for p in line.split(',')]
             if len(parts) >= 2:
                 rid = parts[0].upper()
-                # Handle lines with or without trailing cable details 
                 middle_content = ",".join(parts[1:])
                 cable_detail = parts[-1] if any(x in parts[-1].upper() for x in ["RR", "TO", "CABLE"]) else ""
                 
@@ -134,15 +131,19 @@ def process_multi_sheet_pdf(sheets_list, sig_data, symbols):
             c.setFont("Helvetica-Bold", 12)
             c.drawString(PAGE_MARGIN + 30, y_curr + 15, rid)
             
-            # Reset index to handle terminal positioning
             group = group.reset_index(drop=True)
+            
+            # --- DRAWING LOGIC ---
             for idx, row in group.iterrows():
                 tx = start_x + (idx * FIXED_GAP)
-                draw_terminal_symbol(c, tx, y_curr)
+                # SKIP TERMINAL SYMBOL DRAWING IF IT IS A CHARGER
+                if "CHGR" not in row['Function'].upper():
+                    draw_terminal_symbol(c, tx, y_curr)
+                
                 c.setFont("Helvetica", 8)
                 c.drawCentredString(tx, y_curr - 15, row['Terminal Number'])
                 
-            # Brackets 
+            # --- OVERLAY COMPONENT SYMBOLS ---
             func_groups = group.groupby(['Function', (group['Function'] != group['Function'].shift()).cumsum()]).agg(
                 {'Terminal Number': ['min', 'max'], 'Function': 'first'}
             ).reset_index(drop=True)
@@ -155,16 +156,20 @@ def process_multi_sheet_pdf(sheets_list, sig_data, symbols):
                 x_min = start_x + (start_idx * FIXED_GAP)
                 x_max = start_x + (end_idx * FIXED_GAP)
                 
-                c.line(x_min - 5, y_curr + 50, x_max + 5, y_curr + 50)
-                c.line(x_min - 5, y_curr + 50, x_min - 5, y_curr + 45)
-                c.line(x_max + 5, y_curr + 50, x_max + 5, y_curr + 45)
+                func_name = f_row['Function'].upper()
                 
-                # Updated Keyword check: CHGR for Charger
-                func_name = f_row['Function']
                 if "CHGR" in func_name and symbols.get("CHARGER"):
+                    # Only Draw Symbol, NO TERMINAL LINKS OR BRACKETS
                     img = symbols["CHARGER"]
-                    c.drawInlineImage(img, (x_min + x_max)/2 - 15, y_curr + 55, width=30, height=30)
+                    # Centered Image over the entire range
+                    img_w, img_h = 45, 45
+                    c.drawInlineImage(img, (x_min + x_max)/2 - img_w/2, y_curr, width=img_w, height=img_h)
                 else:
+                    # Draw Brackets and Text for everything else
+                    c.setLineWidth(0.8)
+                    c.line(x_min - 5, y_curr + 50, x_max + 5, y_curr + 50)
+                    c.line(x_min - 5, y_curr + 50, x_min - 5, y_curr + 45)
+                    c.line(x_max + 5, y_curr + 50, x_max + 5, y_curr + 45)
                     c.setFont("Helvetica-Bold", 10)
                     c.drawCentredString((x_min + x_max)/2, y_curr + 60, func_name)
                     
@@ -203,4 +208,4 @@ if 'sheets_data' in st.session_state:
             st.download_button("📥 Download Official CTR PDF", pdf_file, f"CTR_Output.pdf", "application/pdf")
 
     with tabs[1]:
-        st.info("Upload component symbols. Use 'CHGR' in your function name to trigger the Charger symbol.")
+        st.info("Upload component symbols. Use 'CHGR' in your function name to trigger the Charger symbol and hide terminal links.")
