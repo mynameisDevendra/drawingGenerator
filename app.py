@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A3, landscape
+from reportlab.lib.utils import ImageReader
 import re
 import io
 from datetime import datetime
@@ -25,14 +26,19 @@ SHEET: 01
 LOCATION: GTY-01
 A, 12HR [01 to 04], 04C RR TO GTY-01
 
-SYMBOL, A, 02, RELAY
-SYMBOL, A, 03, FUSE
+SYMBOL, A, 02, CHARGER
 """
 
 # ---------------- TXT PARSER ----------------
 def parse_multi_sheet_txt(raw_text):
     sheets_data = []
-    current_meta = {"sheet": 1, "station": "", "location": "", "sip": "", "heading": "TERMINAL CHART"}
+    current_meta = {
+        "sheet": 1,
+        "station": "",
+        "location": "",
+        "sip": "",
+        "heading": "TERMINAL CHART"
+    }
     current_rows = []
     symbols = []
 
@@ -104,16 +110,19 @@ def parse_multi_sheet_txt(raw_text):
     return sheets_data
 
 # ---------------- DRAW HELPERS ----------------
-def draw_page_template(c, width, height, footer, sheet_no, heading):
+def draw_page_template(c, width, height, heading):
     c.setLineWidth(1.5)
-    c.rect(PAGE_MARGIN, PAGE_MARGIN, width - 2*PAGE_MARGIN, height - 2*PAGE_MARGIN)
+    c.rect(PAGE_MARGIN, PAGE_MARGIN, width - 2 * PAGE_MARGIN, height - 2 * PAGE_MARGIN)
     c.setFont("Helvetica-Bold", 16)
-    c.drawCentredString(width/2, height - 60, heading)
+    c.drawCentredString(width / 2, height - 60, heading)
 
-def draw_inline_symbol(c, img, x, y, size=14):
+def draw_inline_symbol(c, img_bytes, x, y, size=14):
+    img_bytes.seek(0)               # CRITICAL
+    img = ImageReader(img_bytes)    # FIX
+
     c.drawImage(
         img,
-        x - size/2,
+        x - size / 2,
         y + 18,
         width=size,
         height=size,
@@ -132,14 +141,14 @@ def process_multi_sheet_pdf(sheets, sig_data, symbol_images):
         df = pd.DataFrame(sheet["rows"])
 
         if df.empty:
-            c.drawString(100, height/2, "NO DATA FOUND")
+            c.drawString(100, height / 2, "NO DATA FOUND")
             c.showPage()
             continue
 
         df["sort"] = df["Terminal Number"].astype(int)
         df = df.sort_values(["Row ID", "sort"])
 
-        draw_page_template(c, width, height, sig_data, meta["sheet"], meta["heading"])
+        draw_page_template(c, width, height, meta["heading"])
 
         info_x = PAGE_MARGIN + ((width - (2 * PAGE_MARGIN)) / 15)
         term_per_row = max(1, int((width - info_x - SAFETY_OFFSET - 60) // FIXED_GAP))
@@ -148,12 +157,12 @@ def process_multi_sheet_pdf(sheets, sig_data, symbol_images):
         rows_used = 0
 
         for rid, grp in df.groupby("Row ID", sort=False):
-            chunks = [grp.iloc[i:i+term_per_row] for i in range(0, len(grp), term_per_row)]
+            chunks = [grp.iloc[i:i + term_per_row] for i in range(0, len(grp), term_per_row)]
 
             for chunk in chunks:
                 if rows_used >= 6:
                     c.showPage()
-                    draw_page_template(c, width, height, sig_data, meta["sheet"], meta["heading"])
+                    draw_page_template(c, width, height, meta["heading"])
                     y = height - 160
                     rows_used = 0
 
@@ -164,13 +173,13 @@ def process_multi_sheet_pdf(sheets, sig_data, symbol_images):
                 for idx, row in enumerate(chunk.itertuples()):
                     tx = x0 + idx * FIXED_GAP
 
-                    c.line(tx-3, y, tx-3, y+40)
-                    c.line(tx+3, y, tx+3, y+40)
+                    c.line(tx - 3, y, tx - 3, y + 40)
+                    c.line(tx + 3, y, tx + 3, y + 40)
                     c.circle(tx, y, 3, fill=1)
-                    c.circle(tx, y+40, 3, fill=1)
+                    c.circle(tx, y + 40, 3, fill=1)
 
                     c.setFont("Helvetica-Bold", 8.5)
-                    c.drawCentredString(tx, y+17, row._4)
+                    c.drawCentredString(tx, y + 17, row._4)
 
                     # INLINE SYMBOL
                     for sym in sheet.get("symbols", []):
@@ -191,7 +200,7 @@ def process_multi_sheet_pdf(sheets, sig_data, symbol_images):
 # ---------------- UI ----------------
 with st.sidebar:
     st.header("📂 Resources")
-    st.download_button("Download Sample TXT", SAMPLE_CONTENT, "sample_ctr.txt")
+    st.download_button("📥 Download Sample TXT", SAMPLE_CONTENT, "sample_ctr.txt")
 
     st.subheader("🧩 Upload Symbols (PNG)")
     uploaded_symbols = st.file_uploader(
@@ -200,13 +209,6 @@ with st.sidebar:
         accept_multiple_files=True
     )
 
-    sig_data = {
-        "prep": st.text_input("Prepared By", "JE/SIG"),
-        "chk1": st.text_input("Checked By", "SSE/SIG"),
-        "chk2": st.text_input("Checked By", "ASTE"),
-        "app": st.text_input("Approved By", "DSTE"),
-    }
-
 symbol_images = {}
 if uploaded_symbols:
     for f in uploaded_symbols:
@@ -214,7 +216,7 @@ if uploaded_symbols:
 
 st.title("🚉 CTR Generator with Inline Symbols")
 
-uploaded_file = st.file_uploader("Upload TXT", type=["txt"])
+uploaded_file = st.file_uploader("Upload Drawing TXT", type=["txt"])
 
 if uploaded_file:
     raw = uploaded_file.getvalue().decode("utf-8")
@@ -224,7 +226,7 @@ if "sheets" in st.session_state:
     if st.button("🚀 Generate PDF", use_container_width=True):
         st.session_state.pdf = process_multi_sheet_pdf(
             st.session_state.sheets,
-            sig_data,
+            {},
             symbol_images
         )
 
