@@ -7,79 +7,71 @@ import re
 import io
 from datetime import datetime
 
-# ---------------- PAGE CONFIG ----------------
+# ================= PAGE CONFIG =================
 st.set_page_config(page_title="CTR Generator Pro", layout="wide")
 
-# ---------------- CONSTANTS ----------------
+# ================= CONSTANTS =================
 PAGE_MARGIN = 20
 SAFETY_OFFSET = 42.5
 FIXED_GAP = 33
 PAGE_SIZE = landscape(A3)
-ROW_HEIGHT_SPACING = 105
 
-# ---------------- SAMPLE ----------------
+TERMINAL_HEIGHT = 40
+ROW_HEIGHT_SPACING = 105
+BLOCK_SYMBOL_HEIGHT = TERMINAL_HEIGHT * 2   # DOUBLE height
+
+# ================= SAMPLE =================
 SAMPLE_CONTENT = """HEADING: SAMPLE TERMINAL CHART
 STATION: KUR
 SIP: SIP/KUR/2025/01
 
 SHEET: 01
 LOCATION: GTY-01
-A, 12HR [01 to 04], 04C RR TO GTY-01
 
-SYMBOL, A, 02, CHARGER
+A, 12HR [01 to 08], 08C RR TO GTY-01
+
+SYMBOL, A, [02 to 05], CHARGER
 """
 
-# ---------------- TXT PARSER ----------------
+# ================= TXT PARSER =================
 def parse_multi_sheet_txt(raw_text):
-    sheets_data = []
-    current_meta = {
-        "sheet": 1,
-        "station": "",
-        "location": "",
-        "sip": "",
-        "heading": "TERMINAL CHART"
-    }
-    current_rows = []
-    symbols = []
+    sheets = []
+    meta = {"sheet": 1, "station": "", "location": "", "sip": "", "heading": "TERMINAL CHART"}
+    rows, symbols = [], []
 
     for line in raw_text.splitlines():
         line = line.strip()
         if not line:
             continue
 
-        upper = line.upper()
+        u = line.upper()
 
-        if upper.startswith("SHEET:"):
-            if current_rows:
-                sheets_data.append({
-                    "meta": current_meta.copy(),
-                    "rows": current_rows,
-                    "symbols": symbols
-                })
-                current_rows, symbols = [], []
+        if u.startswith("SHEET:"):
+            if rows:
+                sheets.append({"meta": meta.copy(), "rows": rows, "symbols": symbols})
+                rows, symbols = [], []
+            meta["sheet"] = int(re.search(r"\d+", line).group())
 
-            val = re.search(r"\d+", line)
-            if val:
-                current_meta["sheet"] = int(val.group())
+        elif u.startswith("STATION:"):
+            meta["station"] = line.split(":", 1)[1].strip()
 
-        elif upper.startswith("STATION:"):
-            current_meta["station"] = line.split(":", 1)[1].strip()
+        elif u.startswith("LOCATION:"):
+            meta["location"] = line.split(":", 1)[1].strip()
 
-        elif upper.startswith("LOCATION:"):
-            current_meta["location"] = line.split(":", 1)[1].strip()
+        elif u.startswith("SIP:"):
+            meta["sip"] = line.split(":", 1)[1].strip()
 
-        elif upper.startswith("SIP:"):
-            current_meta["sip"] = line.split(":", 1)[1].strip()
+        elif u.startswith("HEADING:"):
+            meta["heading"] = line.split(":", 1)[1].strip()
 
-        elif upper.startswith("HEADING:"):
-            current_meta["heading"] = line.split(":", 1)[1].strip()
-
-        elif upper.startswith("SYMBOL"):
+        elif u.startswith("SYMBOL"):
             parts = [p.strip() for p in line.split(",")]
-            if len(parts) >= 4:
+            m = re.search(r"\[(\d+)\s*(?:TO|to)\s*(\d+)\]", parts[2])
+            if m:
                 symbols.append({
                     "row": parts[1].upper(),
-                    "terminal": parts[2].zfill(2),
+                    "start": m.group(1).zfill(2),
+                    "end": m.group(2).zfill(2),
                     "symbol": parts[3].upper()
                 })
 
@@ -87,74 +79,64 @@ def parse_multi_sheet_txt(raw_text):
             parts = [p.strip() for p in line.split(",")]
             rid = parts[0].upper()
             middle = ",".join(parts[1:])
-            pattern = r'([^,\[]+)\[\s*(\d+)\s*(?:to|TO)\s*(\d+)\s*\]'
-            matches = re.findall(pattern, middle)
-
-            for m in matches:
-                func = m[0].strip().upper()
-                for i in range(int(m[1]), int(m[2]) + 1):
-                    current_rows.append({
+            pat = r'([^,\[]+)\[\s*(\d+)\s*(?:TO|to)\s*(\d+)\s*\]'
+            for f, s, e in re.findall(pat, middle):
+                for i in range(int(s), int(e) + 1):
+                    rows.append({
                         "Row ID": rid,
-                        "Function": func,
-                        "Cable Detail": "",
+                        "Function": f.upper(),
                         "Terminal Number": str(i).zfill(2)
                     })
 
-    if current_rows:
-        sheets_data.append({
-            "meta": current_meta,
-            "rows": current_rows,
-            "symbols": symbols
-        })
+    if rows:
+        sheets.append({"meta": meta, "rows": rows, "symbols": symbols})
 
-    return sheets_data
+    return sheets
 
-# ---------------- DRAW HELPERS ----------------
-def draw_page_template(c, width, height, heading):
+# ================= DRAW HELPERS =================
+def draw_page(c, w, h, heading):
     c.setLineWidth(1.5)
-    c.rect(PAGE_MARGIN, PAGE_MARGIN, width - 2 * PAGE_MARGIN, height - 2 * PAGE_MARGIN)
+    c.rect(PAGE_MARGIN, PAGE_MARGIN, w - 2 * PAGE_MARGIN, h - 2 * PAGE_MARGIN)
     c.setFont("Helvetica-Bold", 16)
-    c.drawCentredString(width / 2, height - 60, heading)
+    c.drawCentredString(w / 2, h - 60, heading)
 
-def draw_inline_symbol(c, img_bytes, x, y, size=14):
-    img_bytes.seek(0)               # CRITICAL
-    img = ImageReader(img_bytes)    # FIX
-
+def draw_block_symbol(c, img_bytes, x1, x2, y):
+    img_bytes.seek(0)
+    img = ImageReader(img_bytes)
     c.drawImage(
         img,
-        x - size / 2,
-        y + 18,
-        width=size,
-        height=size,
-        preserveAspectRatio=True,
+        x1,
+        y - 20,
+        width=(x2 - x1),
+        height=BLOCK_SYMBOL_HEIGHT,
+        preserveAspectRatio=False,
         mask="auto"
     )
 
-# ---------------- PDF ENGINE ----------------
-def process_multi_sheet_pdf(sheets, sig_data, symbol_images):
+# ================= PDF ENGINE =================
+def process_multi_sheet_pdf(sheets, symbol_images):
     buffer = io.BytesIO()
-    width, height = PAGE_SIZE
+    w, h = PAGE_SIZE
     c = canvas.Canvas(buffer, pagesize=PAGE_SIZE)
 
     for sheet in sheets:
-        meta = sheet["meta"]
         df = pd.DataFrame(sheet["rows"])
+        df["num"] = df["Terminal Number"].astype(int)
+        df = df.sort_values(["Row ID", "num"])
 
-        if df.empty:
-            c.drawString(100, height / 2, "NO DATA FOUND")
-            c.showPage()
-            continue
+        draw_page(c, w, h, sheet["meta"]["heading"])
 
-        df["sort"] = df["Terminal Number"].astype(int)
-        df = df.sort_values(["Row ID", "sort"])
+        info_x = PAGE_MARGIN + ((w - 2 * PAGE_MARGIN) / 15)
+        term_per_row = int((w - info_x - SAFETY_OFFSET - 60) // FIXED_GAP)
 
-        draw_page_template(c, width, height, meta["heading"])
-
-        info_x = PAGE_MARGIN + ((width - (2 * PAGE_MARGIN)) / 15)
-        term_per_row = max(1, int((width - info_x - SAFETY_OFFSET - 60) // FIXED_GAP))
-
-        y = height - 160
+        y = h - 160
         rows_used = 0
+
+        # -------- BLOCKED TERMINALS --------
+        blocked = set()
+        for s in sheet["symbols"]:
+            for t in range(int(s["start"]), int(s["end"]) + 1):
+                blocked.add((s["row"], str(t).zfill(2)))
 
         for rid, grp in df.groupby("Row ID", sort=False):
             chunks = [grp.iloc[i:i + term_per_row] for i in range(0, len(grp), term_per_row)]
@@ -162,31 +144,45 @@ def process_multi_sheet_pdf(sheets, sig_data, symbol_images):
             for chunk in chunks:
                 if rows_used >= 6:
                     c.showPage()
-                    draw_page_template(c, width, height, meta["heading"])
-                    y = height - 160
+                    draw_page(c, w, h, sheet["meta"]["heading"])
+                    y = h - 160
                     rows_used = 0
 
                 x0 = info_x + SAFETY_OFFSET + 20
                 c.setFont("Helvetica-Bold", 12)
                 c.drawRightString(x0 - 30, y + 15, rid)
 
-                for idx, row in enumerate(chunk.itertuples()):
-                    tx = x0 + idx * FIXED_GAP
+                # ---- DRAW TERMINALS ----
+                for i, r in enumerate(chunk.itertuples()):
+                    tno = r.Terminal_Number
+                    tx = x0 + i * FIXED_GAP
 
-                    c.line(tx - 3, y, tx - 3, y + 40)
-                    c.line(tx + 3, y, tx + 3, y + 40)
-                    c.circle(tx, y, 3, fill=1)
-                    c.circle(tx, y + 40, 3, fill=1)
+                    if (rid, tno) not in blocked:
+                        c.line(tx - 3, y, tx - 3, y + TERMINAL_HEIGHT)
+                        c.line(tx + 3, y, tx + 3, y + TERMINAL_HEIGHT)
+                        c.circle(tx, y, 3, fill=1)
+                        c.circle(tx, y + TERMINAL_HEIGHT, 3, fill=1)
+                        c.setFont("Helvetica-Bold", 8.5)
+                        c.drawCentredString(tx, y + 17, tno)
 
-                    c.setFont("Helvetica-Bold", 8.5)
-                    c.drawCentredString(tx, y + 17, row._4)
+                # ---- DRAW BLOCK SYMBOLS ----
+                for s in sheet["symbols"]:
+                    if s["row"] != rid:
+                        continue
+                    start = int(s["start"])
+                    end = int(s["end"])
+                    first = chunk.iloc[0]["Terminal Number"]
+                    last = chunk.iloc[-1]["Terminal Number"]
 
-                    # INLINE SYMBOL
-                    for sym in sheet.get("symbols", []):
-                        if sym["row"] == rid and sym["terminal"] == row._4:
-                            img = symbol_images.get(sym["symbol"])
-                            if img:
-                                draw_inline_symbol(c, img, tx, y)
+                    if start < int(first) or end > int(last):
+                        continue
+
+                    x1 = x0 + (start - int(first)) * FIXED_GAP - FIXED_GAP / 2
+                    x2 = x0 + (end - int(first)) * FIXED_GAP + FIXED_GAP / 2
+
+                    img = symbol_images.get(s["symbol"])
+                    if img:
+                        draw_block_symbol(c, img, x1, x2, y)
 
                 y -= ROW_HEIGHT_SPACING
                 rows_used += 1
@@ -197,36 +193,29 @@ def process_multi_sheet_pdf(sheets, sig_data, symbol_images):
     buffer.seek(0)
     return buffer
 
-# ---------------- UI ----------------
+# ================= UI =================
 with st.sidebar:
     st.header("📂 Resources")
-    st.download_button("📥 Download Sample TXT", SAMPLE_CONTENT, "sample_ctr.txt")
+    st.download_button("📥 Sample TXT", SAMPLE_CONTENT, "sample_ctr.txt")
 
     st.subheader("🧩 Upload Symbols (PNG)")
-    uploaded_symbols = st.file_uploader(
-        "Upload PNG symbols",
-        type=["png"],
-        accept_multiple_files=True
-    )
+    uploaded = st.file_uploader("Upload PNG files", type=["png"], accept_multiple_files=True)
 
 symbol_images = {}
-if uploaded_symbols:
-    for f in uploaded_symbols:
+if uploaded:
+    for f in uploaded:
         symbol_images[f.name.replace(".png", "").upper()] = io.BytesIO(f.getvalue())
 
-st.title("🚉 CTR Generator with Inline Symbols")
+st.title("🚉 CTR Generator – Block Symbols")
 
-uploaded_file = st.file_uploader("Upload Drawing TXT", type=["txt"])
-
-if uploaded_file:
-    raw = uploaded_file.getvalue().decode("utf-8")
-    st.session_state.sheets = parse_multi_sheet_txt(raw)
+txt = st.file_uploader("Upload Drawing TXT", type=["txt"])
+if txt:
+    st.session_state.sheets = parse_multi_sheet_txt(txt.getvalue().decode())
 
 if "sheets" in st.session_state:
     if st.button("🚀 Generate PDF", use_container_width=True):
         st.session_state.pdf = process_multi_sheet_pdf(
             st.session_state.sheets,
-            {},
             symbol_images
         )
 
