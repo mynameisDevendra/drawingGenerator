@@ -14,6 +14,23 @@ st.set_page_config(page_title="CTR Generator Pro", layout="wide")
 if not os.path.exists("symbols"):
     os.makedirs("symbols")
 
+# --- CONSTANTS & SAMPLE ---
+PAGE_MARGIN = 20
+SAFETY_OFFSET = 42.5
+FIXED_GAP = 33
+PAGE_SIZE = landscape(A3)
+ROW_HEIGHT_SPACING = 105 
+
+SAMPLE_CONTENT = """HEADING: CTR WITH SYMBOLS SAMPLE
+STATION: KUR
+SIP: SIP/KUR/2026/01
+
+SHEET: 01
+LOCATION: GTY-01
+A, 110V AC @CH [01 to 01], @SP [02 to 02], 24V DC @FS [03 to 03], 24C RR to GTY-01
+B, TRACK RELAY @RY [01 to 02], @SP [03 to 03], CHOKE @CK [04 to 04], 12C GTY-01 to LOC-02
+"""
+
 # --- SYMBOL LIBRARY ---
 SYMBOL_LIB = {
     "@CH": {"file": "CHARGER.png", "w": 30, "h": 30, "desc": "Charger Symbol"},
@@ -23,13 +40,6 @@ SYMBOL_LIB = {
     "@RT": {"file": "RT.png", "w": 20, "h": 20, "desc": "RT Symbol"},
     "@SP": {"file": None, "w": 0, "h": 0, "desc": "Blank Space Gap"}
 }
-
-# --- CONSTANTS ---
-PAGE_MARGIN = 20
-SAFETY_OFFSET = 42.5
-FIXED_GAP = 33
-PAGE_SIZE = landscape(A3)
-ROW_HEIGHT_SPACING = 105 
 
 # --- CORE FUNCTIONS ---
 
@@ -141,7 +151,7 @@ def process_multi_sheet_pdf(sheets_list, sig_data):
                 x_start = info_x + SAFETY_OFFSET + 20
                 c.setFont("Helvetica-Bold", fs['row']); c.drawRightString(x_start - 30, y_curr + 15, str(rid))
                 
-                # Pre-process chunk to mark where symbols are
+                # Pre-process chunk to mark symbol positions
                 has_symbol = [any(code in str(t['Function']).upper() for code in SYMBOL_LIB.keys()) for t in chunk]
 
                 for idx, t in enumerate(chunk):
@@ -166,11 +176,10 @@ def process_multi_sheet_pdf(sheets_list, sig_data):
                         c.setFont("Helvetica-Bold", fs['term'])
                         c.drawRightString(tx-8, y_curr+17, str(t['Terminal Number']).zfill(2))
 
-                # Labels: Skip Cable Detail if a Symbol is present in that slot
                 for key, is_h, y_off in [('Function', True, 53.5), ('Cable Detail', False, -13.5)]:
                     i = 0
                     while i < len(chunk):
-                        # NEW: If it's a cable detail row AND a symbol is here, skip drawing text
+                        # Skip Cable Detail text if a Symbol is present in that slot
                         if not is_h and has_symbol[i]: 
                             i += 1
                             continue
@@ -182,7 +191,6 @@ def process_multi_sheet_pdf(sheets_list, sig_data):
                         
                         start_i, end_i = i, i
                         while i < len(chunk) and str(chunk[i][key]).upper().strip() == txt:
-                            # Also stop grouping if we hit a symbol in cable detail mode
                             if not is_h and has_symbol[i]: break 
                             end_i = i
                             i += 1
@@ -202,27 +210,31 @@ def process_multi_sheet_pdf(sheets_list, sig_data):
 # --- UI LOGIC ---
 
 with st.sidebar:
-    st.header("📤 Symbol Management")
-    uploaded_sym = st.file_uploader("Upload PNG library", type=["png"], accept_multiple_files=True)
-    if uploaded_sym:
-        for file in uploaded_sym:
-            with open(os.path.join("symbols", file.name), "wb") as f:
-                f.write(file.getbuffer())
-        st.success(f"Loaded {len(uploaded_sym)} images.")
+    st.header("📂 Resources")
+    # Collapsible Symbol Management
+    with st.expander("📤 Symbol Library Management", expanded=False):
+        uploaded_sym = st.file_uploader("Upload PNG library files", type=["png"], accept_multiple_files=True)
+        if uploaded_sym:
+            for file in uploaded_sym:
+                with open(os.path.join("symbols", file.name), "wb") as f:
+                    f.write(file.getbuffer())
+            st.success(f"Loaded {len(uploaded_sym)} symbols.")
 
-    st.divider()
-    st.markdown("### 🔣 Keywords")
-    for k, v in SYMBOL_LIB.items():
-        st.write(f"**{k}** : {v['desc']}")
+    # Collapsible Keyword Legend
+    with st.expander("🔣 Available Keywords", expanded=False):
+        for k, v in SYMBOL_LIB.items():
+            st.write(f"**{k}** : {v['desc']}")
+
+    st.download_button("📥 Download Sample TXT", SAMPLE_CONTENT, "sample_ctr_symbols.txt", "text/plain", use_container_width=True)
     
     st.divider()
-    with st.expander("✒️ Signatures"):
+    with st.expander("✒️ Signature Details"):
         sig_data = {"prep": st.text_input("Prepared", "JE/SIG"), "chk1": st.text_input("SSE", "SSE/SIG"), 
                     "chk2": st.text_input("ASTE", "ASTE"), "app": st.text_input("DSTE", "DSTE")}
 
-st.title("🚉 CTR Generator Pro (Symbol Cable Correction)")
+st.title("🚉 CTR Generator Pro (Complete UI Revision)")
 
-uploaded_file = st.file_uploader("📂 Upload .txt list", type=["txt"])
+uploaded_file = st.file_uploader("📂 Step 1: Upload Terminal List (.txt)", type=["txt"])
 
 if uploaded_file:
     raw_text = uploaded_file.getvalue().decode("utf-8")
@@ -230,11 +242,12 @@ if uploaded_file:
 
 if 'sheets_data' in st.session_state:
     sheet_names = [f"Sheet {s['meta']['sheet']}: {s['meta']['location']}" for s in st.session_state.sheets_data]
-    sel_idx = st.selectbox("Select Sheet", range(len(sheet_names)), format_func=lambda i: sheet_names[i])
+    sel_idx = st.selectbox("Select Sheet to Edit", range(len(sheet_names)), format_func=lambda i: sheet_names[i])
+    
     curr_rows = st.session_state.sheets_data[sel_idx]['rows']
     edited_df = st.data_editor(pd.DataFrame(curr_rows), num_rows="dynamic", use_container_width=True)
     st.session_state.sheets_data[sel_idx]['rows'] = edited_df.to_dict('records')
 
-    if st.button("🚀 Generate PDF", type="primary", use_container_width=True):
+    if st.button("🚀 Step 2: Generate PDF Drawing", type="primary", use_container_width=True):
         pdf = process_multi_sheet_pdf(st.session_state.sheets_data, sig_data)
-        st.download_button("📥 Download PDF", pdf, f"CTR_{datetime.now().strftime('%d%m%Y')}.pdf", "application/pdf", use_container_width=True)
+        st.download_button("📥 Click Here to Download PDF", pdf, f"CTR_{datetime.now().strftime('%d%m%Y')}.pdf", "application/pdf", use_container_width=True)
