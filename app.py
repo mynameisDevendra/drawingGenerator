@@ -24,21 +24,21 @@ FIXED_GAP = 33
 PAGE_SIZE = landscape(A3)
 ROW_HEIGHT_SPACING = 105 
 
-SAMPLE_CONTENT = """HEADING: SAMPLE TERMINAL CHART
+SAMPLE_CONTENT = """HEADING: TERMINAL CHART WITH SYMBOLS
 STATION: KUR
-SIP: SIP/KUR/2025/01
+SIP: SIP/KUR/2026/01
 
 SHEET: 01
 LOCATION: GTY-01
 A, 12HR [01 to 02], 12HHR [03 to 04], SP [05 to 10], 10C RR to GTY-01
 B, 12HG [01 to 04], SP [05 to 12], 12C RR to GTY-01
-@CHARGER: 50, 450, 60, 60, Primary Charger
-@CHOKE: 150, 450, 40, 40, Filter Choke
+@CHARGER: 50, 50, 60, 60, Main Charger Unit
+@CHOKE: 150, 50, 40, 40, Filter Choke
 
 SHEET: 02
 LOCATION: LOC-02 
 A, 24TPR [01 to 02], 12C GTY-01 to LOC-02
-@CHARGER: 400, 450, 50, 50, Standby Unit
+@CHARGER: 300, 100, 50, 50, Standby Charger
 """
 
 # --- CORE FUNCTIONS ---
@@ -69,22 +69,23 @@ def parse_multi_sheet_txt(raw_text):
         elif upper_line.startswith("HEADING:"):
             current_meta["heading"] = line.split(":", 1)[1].strip()
         
-        # New Symbol Parsing Logic
-        elif upper_line.startswith("@CHARGER:") or upper_line.startswith("@CHOKE:"):
-            parts = line.split(':', 1)
-            sym_type = parts[0][1:].strip().upper()
-            params = parts[1].strip().split(',')
-            if len(params) >= 4:
-                try:
-                    current_symbols.append({
-                        "type": sym_type,
-                        "x": float(params[0]), "y": float(params[1]),
-                        "w": float(params[2]), "h": float(params[3]),
-                        "label": params[4].strip() if len(params) > 4 else ""
-                    })
-                except ValueError: pass
-
+        # Symbol Detection Logic (@CHARGER or @CHOKE)
+        elif upper_line.startswith("@"):
+            match = re.match(r'@(CHARGER|CHOKE):\s*(.*)', line, re.I)
+            if match:
+                sym_type = match.group(1).upper()
+                params = [p.strip() for p in match.group(2).split(',')]
+                if len(params) >= 4:
+                    try:
+                        current_symbols.append({
+                            "type": sym_type,
+                            "x": float(params[0]), "y": float(params[1]),
+                            "w": float(params[2]), "h": float(params[3]),
+                            "label": params[4] if len(params) > 4 else ""
+                        })
+                    except ValueError: pass
         else:
+            # Regular terminal row parsing
             parts = [p.strip() for p in line.split(',')]
             if len(parts) >= 2:
                 rid = parts[0].upper()
@@ -104,6 +105,7 @@ def parse_multi_sheet_txt(raw_text):
                             "Row ID": rid, "Function": func_text, 
                             "Cable Detail": cable_detail, "Terminal Number": str(i).zfill(2)
                         })
+
     if current_rows or current_symbols:
         sheets_data.append({"meta": current_meta, "rows": current_rows, "symbols": current_symbols})
     return sheets_data
@@ -154,57 +156,63 @@ def process_multi_sheet_pdf(sheets_list, sig_data, symbols_map):
             df = df.sort_values(by=['Row ID', 'sort_key'])
         
         f_vals = [sig_data['prep'], sig_data['chk1'], sig_data['chk2'], sig_data['app'], meta['location'], meta['station'], meta['sip'], ""]
-        info_x = PAGE_MARGIN + ((width - (2 * PAGE_MARGIN)) / 15)
-        term_per_row = int((width - info_x - SAFETY_OFFSET - 40) // FIXED_GAP)
+        info_x = draw_page_template(c, width, height, f_vals, meta['sheet'], meta['heading'])
         
-        y_curr, rows_on_page, current_sheet_no = height - 160, 0, meta['sheet']
-        draw_page_template(c, width, height, f_vals, current_sheet_no, meta['heading'])
-        
-        # Draw Symbols for this sheet
+        # --- DRAW SYMBOLS FIRST ---
         for sym in sheet.get('symbols', []):
-            img_data = symbols_map.get(sym['type'])
-            if img_data:
-                # Convert top-down UI coords to bottom-up PDF coords
-                # x is relative to left margin, y is relative to top margin
-                pdf_x = PAGE_MARGIN + sym['x']
-                pdf_y = height - PAGE_MARGIN - sym['y'] - sym['h']
-                c.drawImage(ImageReader(io.BytesIO(img_data)), pdf_x, pdf_y, width=sym['w'], height=sym['h'], mask='auto')
-                if sym['label']:
-                    c.setFont("Helvetica", 8)
-                    c.drawCentredString(pdf_x + sym['w']/2, pdf_y - 10, sym['label'])
+            if sym['type'] in symbols_map:
+                try:
+                    img_data = symbols_map[sym['type']]
+                    # Convert: Y=0 in TXT is Top of Page (minus header area)
+                    # We subtract from height-100 to avoid title area
+                    px = PAGE_MARGIN + sym['x']
+                    py = height - 100 - sym['y'] - sym['h'] 
+                    
+                    c.drawImage(ImageReader(io.BytesIO(img_data)), px, py, width=sym['w'], height=sym['h'], mask='auto')
+                    if sym['label']:
+                        c.setFont("Helvetica-Bold", 9)
+                        c.drawCentredString(px + sym['w']/2, py - 12, sym['label'].upper())
+                except Exception as e:
+                    print(f"Drawing Error: {e}")
 
-        for rid, group in df.groupby('Row ID', sort=False):
-            terms = group.to_dict('records')
-            chunks = [terms[i:i + term_per_row] for i in range(0, len(terms), term_per_row)]
-            for chunk in chunks:
-                if rows_on_page >= 6:
-                    c.showPage()
-                    current_sheet_no += 1
-                    draw_page_template(c, width, height, f_vals, current_sheet_no, meta['heading'])
-                    y_curr, rows_on_page = height - 160, 0
+        # --- DRAW TERMINAL ROWS ---
+        y_curr, rows_on_page = height - 160, 0
+        if not df.empty:
+            for rid, group in df.groupby('Row ID', sort=False):
+                terms = group.to_dict('records')
+                term_per_row = int((width - info_x - SAFETY_OFFSET - 40) // FIXED_GAP)
+                chunks = [terms[i:i + term_per_row] for i in range(0, len(terms), term_per_row)]
                 
-                x_start = info_x + SAFETY_OFFSET + 20
-                c.setFont("Helvetica-Bold", fs['row']); c.drawRightString(x_start - 30, y_curr + 15, str(rid))
-                
-                for idx, t in enumerate(chunk):
-                    tx = x_start + (idx * FIXED_GAP)
-                    c.setLineWidth(1); c.line(tx-3, y_curr, tx-3, y_curr+40); c.line(tx+3, y_curr, tx+3, y_curr+40)
-                    c.circle(tx, y_curr+40, 3, fill=1); c.circle(tx, y_curr, 3, fill=1)
-                    c.setFont("Helvetica-Bold", fs['term']); c.drawRightString(tx-8, y_curr+17, str(t['Terminal Number']).zfill(2))
-                
-                for key, is_h, y_off in [('Function', True, 53.5), ('Cable Detail', False, -13.5)]:
-                    i = 0
-                    while i < len(chunk):
-                        txt = str(chunk[i][key]).upper().strip()
-                        if not txt: i += 1; continue
-                        start_i, end_i = i, i
-                        while i < len(chunk) and str(chunk[i][key]).upper().strip() == txt: end_i = i; i += 1
-                        s_x, e_x = x_start + (start_i * FIXED_GAP), x_start + (end_i * FIXED_GAP)
-                        c.line(s_x-5, y_curr+y_off, e_x+5, y_curr+y_off) # Simplfied group line
-                        c.setFont("Helvetica-Bold", fs['head' if is_h else 'foot'])
-                        c.drawCentredString((s_x+e_x)/2, y_curr + y_off + (12 if is_h else -20), txt)
-                y_curr -= ROW_HEIGHT_SPACING
-                rows_on_page += 1
+                for chunk in chunks:
+                    if rows_on_page >= 6:
+                        c.showPage()
+                        draw_page_template(c, width, height, f_vals, meta['sheet'], meta['heading'])
+                        y_curr, rows_on_page = height - 160, 0
+                    
+                    x_start = info_x + SAFETY_OFFSET + 20
+                    c.setFont("Helvetica-Bold", fs['row']); c.drawRightString(x_start - 30, y_curr + 15, str(rid))
+                    
+                    for idx, t in enumerate(chunk):
+                        tx = x_start + (idx * FIXED_GAP)
+                        c.setLineWidth(1); c.line(tx-3, y_curr, tx-3, y_curr+40); c.line(tx+3, y_curr, tx+3, y_curr+40)
+                        c.circle(tx, y_curr+40, 3, fill=1); c.circle(tx, y_curr, 3, fill=1)
+                        c.setFont("Helvetica-Bold", fs['term']); c.drawRightString(tx-8, y_curr+17, str(t['Terminal Number']).zfill(2))
+                    
+                    # Function and Cable grouping lines
+                    for key, is_h, y_off in [('Function', True, 53.5), ('Cable Detail', False, -13.5)]:
+                        i = 0
+                        while i < len(chunk):
+                            txt = str(chunk[i][key]).upper().strip()
+                            if not txt: i += 1; continue
+                            start_i, end_i = i, i
+                            while i < len(chunk) and str(chunk[i][key]).upper().strip() == txt: end_i = i; i += 1
+                            sx, ex = x_start + (start_i * FIXED_GAP), x_start + (end_i * FIXED_GAP)
+                            c.line(sx-5, y_curr+y_off, ex+5, y_curr+y_off)
+                            c.setFont("Helvetica-Bold", fs['head' if is_h else 'foot'])
+                            c.drawCentredString((sx+ex)/2, y_curr + y_off + (12 if is_h else -20), txt)
+                    
+                    y_curr -= ROW_HEIGHT_SPACING
+                    rows_on_page += 1
         c.showPage() 
     c.save(); buffer.seek(0); return buffer
 
@@ -212,12 +220,12 @@ def process_multi_sheet_pdf(sheets_list, sig_data, symbols_map):
 
 with st.sidebar:
     st.header("📂 Resources")
-    st.download_button("📥 Sample TXT", SAMPLE_CONTENT, "sample.txt", "text/plain", use_container_width=True)
+    st.download_button("📥 Download Sample TXT", SAMPLE_CONTENT, "sample_ctr.txt", "text/plain", use_container_width=True)
     
     st.divider()
-    st.header("🎨 Symbol Upload")
-    charger_img = st.file_uploader("Charger Image", type=['png', 'jpg'])
-    choke_img = st.file_uploader("Choke Image", type=['png', 'jpg'])
+    st.header("🖼️ Symbol Assets")
+    charger_img = st.file_uploader("Upload Charger Symbol (PNG/JPG)", type=['png', 'jpg', 'jpeg'])
+    choke_img = st.file_uploader("Upload Choke Symbol (PNG/JPG)", type=['png', 'jpg', 'jpeg'])
     
     st.divider()
     sig_data = {
@@ -227,21 +235,28 @@ with st.sidebar:
         "app": st.text_input("Approved By", "DSTE")
     }
 
-st.title("🚉 CTR Generator with Symbol Placement")
+st.title("🚉 CTR Drawing Generator")
+st.info("💡 Tip: Use `@CHARGER: X, Y, W, H, Label` in your text file to place symbols.")
 
-uploaded_file = st.file_uploader("Upload .txt Drawing Data", type=["txt"])
+uploaded_file = st.file_uploader("Step 1: Upload Drawing .txt Data", type=["txt"])
 
 if uploaded_file:
     raw_text = uploaded_file.getvalue().decode("utf-8")
     sheets = parse_multi_sheet_txt(raw_text)
     
     if sheets:
-        st.success(f"Parsed {len(sheets)} sheets.")
+        st.success(f"Parsed {len(sheets)} sheets successfully.")
         
-        if st.button("🚀 Generate PDF", type="primary", use_container_width=True):
+        if st.button("🚀 Step 2: Generate PDF Drawing", type="primary", use_container_width=True):
             s_map = {}
             if charger_img: s_map["CHARGER"] = charger_img.getvalue()
             if choke_img: s_map["CHOKE"] = choke_img.getvalue()
             
+            # Check if symbols were used in TXT but images weren't uploaded
+            for s in sheets:
+                for sym in s['symbols']:
+                    if sym['type'] not in s_map:
+                        st.warning(f"⚠️ {sym['type']} is used in Sheet {s['meta']['sheet']} but no image was uploaded in the sidebar.")
+            
             pdf_out = process_multi_sheet_pdf(sheets, sig_data, s_map)
-            st.download_button("📥 Download PDF", pdf_out, "CTR_Drawing.pdf", "application/pdf", use_container_width=True)
+            st.download_button("📥 Step 3: Download PDF", pdf_out, f"CTR_{datetime.now().strftime('%d%m%y')}.pdf", "application/pdf", use_container_width=True)
