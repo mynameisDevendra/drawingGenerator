@@ -1,177 +1,214 @@
 import streamlit as st
-import re, io
 import pandas as pd
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A3, landscape
 from reportlab.lib.utils import ImageReader
+import re
+import io
+import os
 from datetime import datetime
 
-# ================= CONFIG =================
-st.set_page_config(page_title="CTR Generator", layout="wide")
+# --- CONFIG & SYMBOL LIBRARY ---
+st.set_page_config(page_title="CTR Generator Pro", layout="wide")
 
-PAGE_SIZE = landscape(A3)
+# Map your specific text codes to your filenames
+SYMBOL_LIB = {
+    "@CH": "CHARGER.png",
+    "@FS": "FUSE.png",
+    "@RY": "RELAY.png",
+    "@CK": "CHOKE (2).png",
+    "@RT": "RT.png"
+}
+
+# --- CONSTANTS ---
 PAGE_MARGIN = 20
+SAFETY_OFFSET = 42.5
 FIXED_GAP = 33
-TERMINAL_HEIGHT = 40
-SYMBOL_HEIGHT = TERMINAL_HEIGHT * 2
-ROW_GAP = 120
+PAGE_SIZE = landscape(A3)
+ROW_HEIGHT_SPACING = 105 
 
-SYMBOL_TYPES = {"CHARGER", "BATTERY", "RELAY", "SMPS"}
+# --- CORE FUNCTIONS ---
 
-# ================= PARSER =================
-def parse_txt(text):
-    sheets = []
-    sheet = None
+def parse_multi_sheet_txt(raw_text):
+    sheets_data = []
+    current_meta = {"sheet": 1, "station": "", "location": "", "sip": "", "heading": "TERMINAL CHART"}
+    current_rows = []
 
-    for line in text.splitlines():
+    for line in raw_text.splitlines():
         line = line.strip()
-        if not line:
-            continue
-        u = line.upper()
-
-        if u.startswith("SHEET:"):
-            if sheet:
-                sheets.append(sheet)
-            sheet = {
-                "meta": {},
-                "rows": []
-            }
-            sheet["meta"]["sheet"] = int(re.search(r"\d+", line).group())
-
-        elif any(u.startswith(k) for k in ["HEADING:", "STATION:", "LOCATION:", "SIP:"]):
-            k, v = line.split(":", 1)
-            sheet["meta"][k.strip().lower()] = v.strip()
-
+        if not line: continue
+        upper_line = line.upper()
+        
+        if upper_line.startswith("SHEET:"):
+            if current_rows:
+                sheets_data.append({"meta": current_meta.copy(), "rows": current_rows})
+                current_rows = []
+            val = re.search(r'\d+', line)
+            if val: current_meta["sheet"] = int(val.group())
+        elif upper_line.startswith("STATION:"):
+            current_meta["station"] = line.split(":", 1)[1].strip()
+        elif upper_line.startswith("LOCATION:"):
+            current_meta["location"] = line.split(":", 1)[1].strip()
+        elif upper_line.startswith("SIP:"):
+            current_meta["sip"] = line.split(":", 1)[1].strip()
+        elif upper_line.startswith("HEADING:"):
+            current_meta["heading"] = line.split(":", 1)[1].strip()
         else:
-            # ROW LINE
-            rid, rest = line.split(",", 1)
-            rid = rid.strip().upper()
+            parts = [p.strip() for p in line.split(',')]
+            if len(parts) >= 2:
+                rid = parts[0].upper()
+                middle_part = ",".join(parts[1:])
+                last_part = parts[-1].upper()
+                term_keywords = ["SPARE", "RESERVED", "NI", "E3", "TERMINAL", "BLOCK", "LINK", "RESERVE", "SP"]
+                is_cable = not any(key in last_part for key in term_keywords)
+                cable_detail = last_part if (is_cable and len(parts) >= 3) else ""
+                
+                pattern = r'([^,\[]+)\[\s*(\d+)\s+to\s+(\d+)\s*\]'
+                matches = re.findall(pattern, middle_part, re.I)
+                for match in matches:
+                    func_text = match[0].strip().upper()
+                    start, end = int(match[1]), int(match[2])
+                    for i in range(start, end + 1):
+                        current_rows.append({
+                            "Row ID": rid, "Function": func_text, 
+                            "Cable Detail": cable_detail, "Terminal Number": str(i).zfill(2)
+                        })
+    if current_rows: sheets_data.append({"meta": current_meta, "rows": current_rows})
+    return sheets_data
 
-            blocks = []
-            cable = None
-
-            for part in rest.split(","):
-                part = part.strip()
-                m = re.match(r'([A-Z0-9_]+)\[\s*(\d+)\s*TO\s*(\d+)\s*\]', part, re.I)
-                if m:
-                    blocks.append({
-                        "type": m.group(1).upper(),
-                        "start": int(m.group(2)),
-                        "end": int(m.group(3))
-                    })
-                else:
-                    cable = part
-
-            sheet["rows"].append({
-                "row": rid,
-                "blocks": blocks,
-                "cable": cable
-            })
-
-    if sheet:
-        sheets.append(sheet)
-
-    return sheets
-
-# ================= DRAW HELPERS =================
-def draw_page(c, w, h, meta):
+def draw_page_template(c, width, height, footer_values, sheet_num, page_heading):
     c.setLineWidth(1.5)
-    c.rect(PAGE_MARGIN, PAGE_MARGIN, w-2*PAGE_MARGIN, h-2*PAGE_MARGIN)
+    c.rect(PAGE_MARGIN, PAGE_MARGIN, width - (2 * PAGE_MARGIN), height - (2 * PAGE_MARGIN))
     c.setFont("Helvetica-Bold", 16)
-    c.drawCentredString(w/2, h-50, meta.get("heading", ""))
-    c.setFont("Helvetica", 9)
-    c.drawString(PAGE_MARGIN+10, h-70, meta.get("station", ""))
-    c.drawRightString(w-PAGE_MARGIN-10, h-70, meta.get("sip", ""))
+    c.drawCentredString(width / 2, height - 60, page_heading.upper())
+    
+    footer_y = PAGE_MARGIN + 60
+    c.line(PAGE_MARGIN, footer_y, width - PAGE_MARGIN, footer_y)
+    total_footer_w = width - (2 * PAGE_MARGIN)
+    info_x = PAGE_MARGIN + (total_footer_w / 15)
+    c.line(info_x, PAGE_MARGIN, info_x, height - PAGE_MARGIN)
+    
+    remaining_w = total_footer_w - (total_footer_w / 15)
+    box_w = remaining_w / 7 
+    dividers = [info_x + (i * box_w) for i in range(8)] 
+    for x in dividers[:-1]: c.line(x, PAGE_MARGIN, x, footer_y)
 
-def draw_terminal(c, x, y, num):
-    c.line(x-3, y, x-3, y+TERMINAL_HEIGHT)
-    c.line(x+3, y, x+3, y+TERMINAL_HEIGHT)
-    c.circle(x, y, 3, fill=1)
-    c.circle(x, y+TERMINAL_HEIGHT, 3, fill=1)
-    c.setFont("Helvetica-Bold", 8)
-    c.drawCentredString(x, y+15, f"{num:02}")
+    headers = ["PREPARED BY", "CHECKED BY", "CHECKED BY", "APPROVED BY", "LOCATION", "STATION", "SIP", "SHEET NO."]
+    for i in range(8):
+        x_start = PAGE_MARGIN if i == 0 else dividers[i-1]
+        x_end = dividers[i]
+        x_c = (x_start + x_end) / 2
+        c.setFont("Helvetica-Bold", 9.0)
+        c.drawCentredString(x_c, footer_y - 12, headers[i])
+        val = f"{sheet_num:02}" if i == 7 else str(footer_values[i])
+        y_pos = PAGE_MARGIN + 30 if i in [4, 5, 6, 7] else PAGE_MARGIN + 5
+        c.drawCentredString(x_c, y_pos, val.upper())
+            
+    return info_x
 
-def draw_group(c, x1, x2, y, text, above=True):
-    c.line(x1, y, x2, y)
-    c.line(x1, y, x1, y+(5 if above else -5))
-    c.line(x2, y, x2, y+(5 if above else -5))
-    c.setFont("Helvetica-Bold", 9)
-    c.drawCentredString((x1+x2)/2, y+(10 if above else -15), text)
+def process_multi_sheet_pdf(sheets_list, sig_data):
+    buffer = io.BytesIO()
+    width, height = PAGE_SIZE
+    c = canvas.Canvas(buffer, pagesize=PAGE_SIZE)
+    
+    fs = {'head': 10.0, 'foot': 9.5, 'term': 8.5, 'row': 12.0}
+    
+    for sheet in sheets_list:
+        meta = sheet['meta']
+        df = pd.DataFrame(sheet['rows'])
+        df['sort_key'] = df['Terminal Number'].apply(lambda s: int(re.findall(r'\d+', str(s))[0]) if re.findall(r'\d+', str(s)) else 0)
+        df = df.sort_values(by=['Row ID', 'sort_key'])
+        
+        f_vals = [sig_data['prep'], sig_data['chk1'], sig_data['chk2'], sig_data['app'], meta['location'], meta['station'], meta['sip'], "AUTO"]
+        info_x = PAGE_MARGIN + ((width - (2 * PAGE_MARGIN)) / 15)
+        term_per_row = int((width - info_x - SAFETY_OFFSET - 40) // FIXED_GAP)
+        
+        y_curr, rows_on_page, current_sheet_no = height - 160, 0, meta['sheet']
+        draw_page_template(c, width, height, f_vals, current_sheet_no, meta['heading'])
+        
+        for rid, group in df.groupby('Row ID', sort=False):
+            terms = group.to_dict('records')
+            chunks = [terms[i:i + term_per_row] for i in range(0, len(terms), term_per_row)]
+            for chunk in chunks:
+                if rows_on_page >= 6:
+                    c.showPage()
+                    current_sheet_no += 1
+                    draw_page_template(c, width, height, f_vals, current_sheet_no, meta['heading'])
+                    y_curr, rows_on_page = height - 160, 0
+                
+                x_start = info_x + SAFETY_OFFSET + 20
+                c.setFont("Helvetica-Bold", fs['row']); c.drawRightString(x_start - 30, y_curr + 15, str(rid))
+                
+                for idx, t in enumerate(chunk):
+                    tx = x_start + (idx * FIXED_GAP)
+                    
+                    # 1. Base Terminal Lines
+                    c.setLineWidth(1); c.line(tx-3, y_curr, tx-3, y_curr+40); c.line(tx+3, y_curr, tx+3, y_curr+40)
+                    c.circle(tx, y_curr+40, 3, fill=1); c.circle(tx, y_curr, 3, fill=1)
+                    c.setFont("Helvetica-Bold", fs['term']); c.drawRightString(tx-8, y_curr+17, str(t['Terminal Number']).zfill(2))
 
-def draw_symbol(c, img, x1, x2, y):
-    img.seek(0)
-    c.drawImage(
-        ImageReader(img),
-        x1,
-        y,
-        width=(x2-x1),
-        height=SYMBOL_HEIGHT,
-        preserveAspectRatio=False,
-        mask="auto"
-    )
+                    # 2. Render Library Symbol if code exists
+                    func_text = str(t['Function']).upper().strip()
+                    for code, img_file in SYMBOL_LIB.items():
+                        if code in func_text:
+                            img_path = os.path.join("symbols", img_file)
+                            if os.path.exists(img_path):
+                                img = ImageReader(img_path)
+                                # Centered between terminals
+                                c.drawImage(img, tx-10, y_curr+10, width=20, height=20, mask='auto', preserveAspectRatio=True)
+                            # Remove code from text to keep drawing clean
+                            t['Function'] = func_text.replace(code, "").strip()
 
-# ================= PDF ENGINE =================
-def generate_pdf(sheets, symbol_images):
-    buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=PAGE_SIZE)
-    w, h = PAGE_SIZE
+                # Row Labels (Functions & Cables)
+                for key, is_h, y_off in [('Function', True, 53.5), ('Cable Detail', False, -13.5)]:
+                    i = 0
+                    while i < len(chunk):
+                        txt = str(chunk[i][key]).upper().strip()
+                        if not txt: i += 1; continue
+                        start_i, end_i = i, i
+                        while i < len(chunk) and str(chunk[i][key]).upper().strip() == txt: end_i = i; i += 1
+                        s_x, e_x = x_start + (start_i * FIXED_GAP), x_start + (end_i * FIXED_GAP)
+                        
+                        # Drawing Grouping Lines
+                        c.setLineWidth(0.8); c.line(s_x-5, y_curr+y_off, e_x+5, y_curr+y_off)
+                        tick = 5 if is_h else -5
+                        c.line(s_x-5, y_curr+y_off, s_x-5, y_curr+y_off-tick); c.line(e_x+5, y_curr+y_off, e_x+5, y_curr+y_off-tick)
+                        
+                        c.setFont("Helvetica-Bold", fs['head' if is_h else 'foot'])
+                        c.drawCentredString((s_x+e_x)/2, y_curr+y_off+(12 if is_h else -20), txt)
+                        
+                y_curr -= ROW_HEIGHT_SPACING
+                rows_on_page += 1
+        c.showPage() 
+    c.save(); buffer.seek(0); return buffer
 
-    for sheet in sheets:
-        draw_page(c, w, h, sheet["meta"])
-        y = h - 140
-        x0 = PAGE_MARGIN + 100
+# --- UI LOGIC ---
 
-        for row in sheet["rows"]:
-            rid = row["row"]
-            c.setFont("Helvetica-Bold", 12)
-            c.drawRightString(x0-40, y+15, rid)
+with st.sidebar:
+    st.header("📂 Resources")
+    st.markdown("### 🔣 Symbol Codes")
+    st.info("\n".join([f"**{k}** : {v}" for k, v in SYMBOL_LIB.items()]))
+    st.divider()
+    with st.expander("✒️ Signature Names", expanded=False):
+        sig_data = {"prep": st.text_input("Prepared", "JE/SIG"), "chk1": st.text_input("SSE", "SSE/SIG"), 
+                    "chk2": st.text_input("ASTE", "ASTE"), "app": st.text_input("DSTE", "DSTE")}
 
-            blocks = row["blocks"]
-            max_t = max(b["end"] for b in blocks)
+st.title("🚉 CTR Generator with Symbol Library")
 
-            # Draw terminals & symbols
-            for b in blocks:
-                start, end, typ = b["start"], b["end"], b["type"]
-                x1 = x0 + (start-1)*FIXED_GAP
-                x2 = x0 + end*FIXED_GAP
+uploaded_file = st.file_uploader("📂 Upload Drawing Content (.txt)", type=["txt"])
 
-                if typ in SYMBOL_TYPES:
-                    img = symbol_images.get(typ)
-                    if img:
-                        draw_symbol(c, img, x1, x2, y)
-                    draw_group(c, x1, x2, y+SYMBOL_HEIGHT+10, typ, above=True)
-                else:
-                    for t in range(start, end+1):
-                        tx = x0 + (t-1)*FIXED_GAP
-                        draw_terminal(c, tx, y, t)
-                    draw_group(c, x1, x2, y+TERMINAL_HEIGHT+10, typ, above=True)
+if uploaded_file:
+    raw_text = uploaded_file.getvalue().decode("utf-8")
+    st.session_state.sheets_data = parse_multi_sheet_txt(raw_text)
 
-            # Cable detail (full row)
-            if row["cable"]:
-                x1 = x0
-                x2 = x0 + max_t*FIXED_GAP
-                draw_group(c, x1, x2, y-15, row["cable"], above=False)
+if 'sheets_data' in st.session_state and st.session_state.sheets_data:
+    sheet_names = [f"Sheet {s['meta']['sheet']}: {s['meta']['location']}" for s in st.session_state.sheets_data]
+    sel_idx = st.selectbox("Select Sheet to Edit", range(len(sheet_names)), format_func=lambda i: sheet_names[i])
+    
+    curr_rows = st.session_state.sheets_data[sel_idx]['rows']
+    edited_df = st.data_editor(pd.DataFrame(curr_rows), num_rows="dynamic", use_container_width=True)
+    st.session_state.sheets_data[sel_idx]['rows'] = edited_df.to_dict('records')
 
-            y -= ROW_GAP
-
-        c.showPage()
-
-    c.save()
-    buf.seek(0)
-    return buf
-
-# ================= UI =================
-st.title("🚉 CTR Generator (Final Format)")
-
-txt = st.file_uploader("Upload TXT Input", type=["txt"])
-imgs = st.file_uploader("Upload Symbol PNGs (CHARGER, BATTERY, etc.)", type=["png"], accept_multiple_files=True)
-
-symbols = {}
-if imgs:
-    for f in imgs:
-        symbols[f.name.replace(".png", "").upper()] = io.BytesIO(f.getvalue())
-
-if txt and st.button("Generate PDF"):
-    sheets = parse_txt(txt.getvalue().decode())
-    pdf = generate_pdf(sheets, symbols)
-    st.download_button("Download PDF", pdf, f"CTR_{datetime.now().strftime('%d%m%Y')}.pdf")
+    if st.button("🚀 Generate PDF Drawing", type="primary", use_container_width=True):
+        pdf = process_multi_sheet_pdf(st.session_state.sheets_data, sig_data)
+        st.download_button("📥 Download PDF", pdf, f"CTR_Output_{datetime.now().strftime('%d%m%Y')}.pdf", "application/pdf", use_container_width=True)
