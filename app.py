@@ -4,16 +4,18 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A3, landscape
 import re
 import io
+from datetime import datetime
 from PIL import Image
 
 # --- CONFIG ---
-st.set_page_config(page_title="CTR Symbol Generator", layout="wide")
+st.set_page_config(page_title="CTR Drawing Generator", layout="wide")
 
 PAGE_MARGIN = 20
 SAFETY_OFFSET = 42.5
 FIXED_GAP = 33
 PAGE_SIZE = landscape(A3)
-ROW_HEIGHT_SPACING = 120 # Increased spacing to accommodate cable labels
+ROW_HEIGHT_SPACING = 130  # Increased to fit cable labels
+CABLE_BAR_Y_OFFSET = 60   # Height of the grouping bar above terminal
 
 # --- FUNCTIONS ---
 
@@ -38,6 +40,7 @@ def parse_txt_with_symbols(raw_text):
         elif upper_line.startswith("LOCATION:"):
             current_meta["location"] = line.split(":", 1)[1].strip()
         elif upper_line.startswith("SYMBOL:"):
+            # Format: SYMBOL: FUSE [A, 05]
             match = re.search(r'SYMBOL:\s*(\w+)\s*\[(\w+),\s*(\d+)\]', line, re.I)
             if match:
                 current_rows.append({
@@ -45,30 +48,28 @@ def parse_txt_with_symbols(raw_text):
                     "Function": match.group(1).upper(),
                     "Terminal Number": match.group(3).zfill(2),
                     "is_symbol": True,
-                    "Cable Group": None
+                    "cable_name": None
                 })
         else:
-            # Format Expected: A, 24C_TO_P6[01 to 12], 12C_SPARE[13 to 24]
+            # Format: A, CABLE_NAME[01 to 10], SPARE[11 to 12]
             parts = [p.strip() for p in line.split(',')]
             if len(parts) >= 2:
                 rid = parts[0].upper()
-                for cable_part in parts[1:]:
-                    # Pattern to find: CABLE_NAME [ START to END ]
-                    pattern = r'([^,\[]+)\[\s*(\d+)\s+to\s+(\d+)\s*\]'
-                    match = re.search(pattern, cable_part, re.I)
-                    if match:
-                        cable_name = match.group(1).strip().upper()
-                        start, end = int(match.group(2)), int(match.group(3))
-                        for i in range(start, end + 1):
-                            current_rows.append({
-                                "Row ID": rid, 
-                                "Function": cable_name, 
-                                "Terminal Number": str(i).zfill(2), 
-                                "is_symbol": False,
-                                "Cable Group": cable_name # This links the terminals to a cable
-                            })
-
-    if current_rows: sheets_data.append({"meta": current_meta, "rows": current_rows})
+                middle_part = ",".join(parts[1:])
+                pattern = r'([^,\[]+)\[\s*(\d+)\s+to\s+(\d+)\s*\]'
+                matches = re.findall(pattern, middle_part, re.I)
+                for m in matches:
+                    cable_name, start, end = m[0].strip().upper(), int(m[1]), int(m[2])
+                    for i in range(start, end + 1):
+                        current_rows.append({
+                            "Row ID": rid, 
+                            "Function": cable_name, 
+                            "Terminal Number": str(i).zfill(2), 
+                            "is_symbol": False,
+                            "cable_name": cable_name
+                        })
+    if current_rows: 
+        sheets_data.append({"meta": current_meta, "rows": current_rows})
     return sheets_data
 
 def draw_page_template(c, width, height, meta, sheet_no):
@@ -77,7 +78,8 @@ def draw_page_template(c, width, height, meta, sheet_no):
     c.setFont("Helvetica-Bold", 16)
     c.drawCentredString(width / 2, height - 60, meta['heading'].upper())
     c.setFont("Helvetica-Bold", 10)
-    c.drawString(PAGE_MARGIN + 20, PAGE_MARGIN + 20, f"STATION: {meta['station']} | LOCATION: {meta['location']} | SHEET: {sheet_no}")
+    c.drawString(PAGE_MARGIN + 20, PAGE_MARGIN + 35, f"STATION: {meta['station']} | LOCATION: {meta['location']}")
+    c.drawRightString(width - PAGE_MARGIN - 20, PAGE_MARGIN + 35, f"SHEET: {sheet_no}")
 
 def generate_pdf(sheets_list, symbol_images):
     buffer = io.BytesIO()
@@ -90,48 +92,44 @@ def generate_pdf(sheets_list, symbol_images):
         df['sort_key'] = pd.to_numeric(df['Terminal Number'])
         df = df.sort_values(['Row ID', 'sort_key'])
         
-        y_curr = height - 160
+        y_curr = height - 180
         draw_page_template(c, width, height, meta, meta['sheet'])
+        
         info_x = PAGE_MARGIN + ((width - (2 * PAGE_MARGIN)) / 15)
         
         for rid, group in df.groupby('Row ID', sort=False):
             x_start = info_x + SAFETY_OFFSET + 20
             c.setFont("Helvetica-Bold", 12)
-            c.drawRightString(x_start - 30, y_curr + 15, str(rid))
+            c.drawRightString(x_start - 30, y_curr + 10, str(rid))
             
             chunk = group.to_dict('records')
             
-            # --- CABLE GROUPING LOGIC ---
-            # Identify continuous blocks of the same 'Cable Group'
+            # --- CABLE GROUPING DRAWING ---
             groups = []
-            if len(chunk) > 0:
-                current_g = {"name": chunk[0]['Cable Group'], "start_idx": 0, "count": 1}
+            if chunk:
+                curr_g = {"name": chunk[0]['cable_name'], "start": 0, "count": 1}
                 for i in range(1, len(chunk)):
-                    if chunk[i]['Cable Group'] == current_g['name'] and chunk[i]['Cable Group'] is not None:
-                        current_g['count'] += 1
+                    if chunk[i]['cable_name'] == curr_g['name'] and curr_g['name'] is not None:
+                        curr_g['count'] += 1
                     else:
-                        groups.append(current_g)
-                        current_g = {"name": chunk[i]['Cable Group'], "start_idx": i, "count": 1}
-                groups.append(current_g)
+                        groups.append(curr_g)
+                        curr_g = {"name": chunk[i]['cable_name'], "start": i, "count": 1}
+                groups.append(curr_g)
 
-            # Draw Cable Brackets/Lines
             for g in groups:
                 if g['name']:
-                    lx_start = x_start + (g['start_idx'] * FIXED_GAP)
+                    lx_start = x_start + (g['start'] * FIXED_GAP)
                     lx_end = lx_start + ((g['count'] - 1) * FIXED_GAP)
-                    
-                    # Draw a horizontal line above the terminals
-                    c.setLineWidth(0.5)
-                    c.line(lx_start - 5, y_curr + 55, lx_end + 5, y_curr + 55)
-                    # Draw small vertical ticks at ends
-                    c.line(lx_start - 5, y_curr + 55, lx_start - 5, y_curr + 45)
-                    c.line(lx_end + 5, y_curr + 55, lx_end + 5, y_curr + 45)
-                    
-                    # Draw Cable Name
-                    c.setFont("Helvetica-Oblique", 7)
-                    c.drawCentredString((lx_start + lx_end)/2, y_curr + 58, g['name'])
+                    # Draw bracket
+                    c.setLineWidth(0.7)
+                    c.line(lx_start - 5, y_curr + CABLE_BAR_Y_OFFSET, lx_end + 5, y_curr + CABLE_BAR_Y_OFFSET)
+                    c.line(lx_start - 5, y_curr + CABLE_BAR_Y_OFFSET, lx_start - 5, y_curr + CABLE_BAR_Y_OFFSET - 10)
+                    c.line(lx_end + 5, y_curr + CABLE_BAR_Y_OFFSET, lx_end + 5, y_curr + CABLE_BAR_Y_OFFSET - 10)
+                    # Label
+                    c.setFont("Helvetica-BoldOblique", 7)
+                    c.drawCentredString((lx_start + lx_end)/2, y_curr + CABLE_BAR_Y_OFFSET + 3, g['name'])
 
-            # Draw Individual Terminals
+            # --- TERMINAL DRAWING ---
             for idx, t in enumerate(chunk):
                 tx = x_start + (idx * FIXED_GAP)
                 
@@ -139,7 +137,7 @@ def generate_pdf(sheets_list, symbol_images):
                     name = t['Function']
                     if name in symbol_images:
                         c.drawImage(symbol_images[name], tx-12, y_curr+5, width=24, height=28, mask='auto')
-                    c.setFont("Helvetica-Bold", 9)
+                    c.setFont("Helvetica-Bold", 8)
                     c.drawCentredString(tx, y_curr + 40, name)
                 else:
                     c.setLineWidth(1)
@@ -156,6 +154,43 @@ def generate_pdf(sheets_list, symbol_images):
     buffer.seek(0)
     return buffer
 
-# --- UI (Remains largely the same) ---
-st.title("🚉 CTR Drawing Generator with Cable Grouping")
-# ... (Keep the sidebar and file uploader code from your original snippet)
+# --- UI ---
+st.sidebar.header("⚙️ Settings & Assets")
+symbols_list = ["CHARGER", "CHOKE", "FUSE", "RELAY", "RESISTANCE"]
+sym_images = {}
+
+with st.sidebar:
+    for s in symbols_list:
+        f = st.file_uploader(f"Upload icon for {s}", type=["png", "jpg"], key=s)
+        if f: sym_images[s] = Image.open(f)
+
+st.subheader("1. Upload Data")
+uploaded_file = st.file_uploader("Choose a TXT file", type=["txt"])
+
+if uploaded_file:
+    raw_text = uploaded_file.getvalue().decode("utf-8")
+    data = parse_txt_with_symbols(raw_text)
+    
+    if data:
+        st.success(f"Parsed {len(data)} sheet(s) successfully.")
+        
+        st.subheader("2. Review & Generate")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🛠️ Generate PDF Drawing", use_container_width=True):
+                pdf_output = generate_pdf(data, sym_images)
+                st.session_state['pdf_output'] = pdf_output
+        
+        if 'pdf_output' in st.session_state:
+            with col2:
+                st.download_button(
+                    label="📥 Download PDF",
+                    data=st.session_state['pdf_output'],
+                    file_name=f"CTR_Output_{datetime.now().strftime('%H%M%S')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+    else:
+        st.error("Could not parse file. Please ensure the format matches 'ROW, CABLE[01 to 10]'.")
+else:
+    st.info("Awaiting TXT file upload...")
