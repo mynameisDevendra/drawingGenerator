@@ -11,19 +11,19 @@ from datetime import datetime
 # --- UI CONFIG & DIRECTORY SETUP ---
 st.set_page_config(page_title="CTR Generator Pro", layout="wide")
 
-# Ensure the symbols directory exists locally for the PDF generator to access
+# Ensure the symbols directory exists locally
 if not os.path.exists("symbols"):
     os.makedirs("symbols")
 
-# --- SYMBOL LIBRARY WITH SIZE CONTROLS ---
-# You can adjust 'w' (width) and 'h' (height) here to suit your specific PNGs.
-# 18-20 width fits between terminal lines; 30+ spans across them.
+# --- SYMBOL LIBRARY WITH SIZE & SPACE CONTROLS ---
+# We added @SP for a blank gap between symbols
 SYMBOL_LIB = {
-    "@CH": {"file": "CHARGER.png", "w": 60, "h": 60},
-    "@FS": {"file": "FUSE.png", "w": 18, "h": 24},
-    "@RY": {"file": "RELAY.png", "w": 28, "h": 22},
-    "@CK": {"file": "CHOKE (2).png", "w": 25, "h": 20},
-    "@RT": {"file": "RT.png", "w": 20, "h": 20}
+    "@CH": {"file": "CHARGER.png", "w": 30, "h": 30, "desc": "Charger Symbol"},
+    "@FS": {"file": "FUSE.png", "w": 18, "h": 24, "desc": "Fuse Symbol"},
+    "@RY": {"file": "RELAY.png", "w": 28, "h": 22, "desc": "Relay Symbol"},
+    "@CK": {"file": "CHOKE (2).png", "w": 25, "h": 20, "desc": "Choke Symbol"},
+    "@RT": {"file": "RT.png", "w": 20, "h": 20, "desc": "RT Symbol"},
+    "@SP": {"file": None, "w": 0, "h": 0, "desc": "Blank Space Gap"}
 }
 
 # --- CONSTANTS ---
@@ -147,36 +147,37 @@ def process_multi_sheet_pdf(sheets_list, sig_data):
                     tx = x_start + (idx * FIXED_GAP)
                     func_text = str(t['Function']).upper().strip()
                     
-                    # 1. Detect if a symbol code is present
                     active_code = None
                     for code in SYMBOL_LIB.keys():
                         if code in func_text:
                             active_code = code
                             break
                     
-                    if active_code:
-                        # 2. Draw Symbol ONLY (Skip terminal lines/circles to avoid overlap)
+                    # LOGIC: Handle Space Gap vs Symbol vs Standard Terminal
+                    if active_code == "@SP":
+                        # Draw Nothing - This creates a blank space gap
+                        t['Function'] = func_text.replace("@SP", "").strip()
+                    
+                    elif active_code:
+                        # Draw Symbol Only (Removes standard terminal graphics to prevent overlap)
                         sym_data = SYMBOL_LIB[active_code]
                         img_path = os.path.join("symbols", sym_data["file"])
-                        
                         if os.path.exists(img_path):
                             img = ImageReader(img_path)
                             sw, sh = sym_data["w"], sym_data["h"]
-                            # Draw centered on the terminal position
                             c.drawImage(img, tx - (sw/2), (y_curr + 20) - (sh/2), 
                                         width=sw, height=sh, mask='auto', preserveAspectRatio=True)
-                        
-                        # Clean label for text rendering later
                         t['Function'] = func_text.replace(active_code, "").strip()
+                    
                     else:
-                        # 3. Draw Standard Terminal (Only if no symbol code)
+                        # Draw Standard Terminal Circles and Lines
                         c.setLineWidth(1)
                         c.line(tx-3, y_curr, tx-3, y_curr+40); c.line(tx+3, y_curr, tx+3, y_curr+40)
                         c.circle(tx, y_curr+40, 3, fill=1); c.circle(tx, y_curr, 3, fill=1)
                         c.setFont("Helvetica-Bold", fs['term'])
                         c.drawRightString(tx-8, y_curr+17, str(t['Terminal Number']).zfill(2))
 
-                # Labels for Functions and Cable Details
+                # Horizontal labels for Functions and Cables
                 for key, is_h, y_off in [('Function', True, 53.5), ('Cable Detail', False, -13.5)]:
                     i = 0
                     while i < len(chunk):
@@ -199,27 +200,30 @@ def process_multi_sheet_pdf(sheets_list, sig_data):
 # --- UI LOGIC ---
 
 with st.sidebar:
-    st.header("📤 Step 1: Upload Symbols")
-    # This allows you to upload your PNGs into the app's 'symbols' folder
-    uploaded_sym = st.file_uploader("Upload PNG files (CHARGER, FUSE, etc.)", type=["png"], accept_multiple_files=True)
+    st.header("📤 Symbol Management")
+    # Step 1: Upload PNGs
+    uploaded_sym = st.file_uploader("Upload PNG library here", type=["png"], accept_multiple_files=True)
     if uploaded_sym:
         for file in uploaded_sym:
             with open(os.path.join("symbols", file.name), "wb") as f:
                 f.write(file.getbuffer())
-        st.success(f"Successfully loaded {len(uploaded_sym)} symbol(s).")
+        st.success(f"Loaded {len(uploaded_sym)} images.")
 
     st.divider()
-    st.markdown("### 🔣 Terminal Codes")
-    st.info("\n".join([f"**{k}** : {v['file']} ({v['w']}x{v['h']})" for k, v in SYMBOL_LIB.items()]))
+    st.markdown("### 🔣 Available Keywords")
+    # Display the legend for the user
+    for k, v in SYMBOL_LIB.items():
+        st.write(f"**{k}** : {v['desc']}")
     
     st.divider()
     with st.expander("✒️ Signature Details"):
         sig_data = {"prep": st.text_input("Prepared", "JE/SIG"), "chk1": st.text_input("SSE", "SSE/SIG"), 
                     "chk2": st.text_input("ASTE", "ASTE"), "app": st.text_input("DSTE", "DSTE")}
 
-st.title("🚉 CTR Generator Pro (Enhanced Symbol Library)")
+st.title("🚉 CTR Generator Pro (Complete Correction)")
 
-uploaded_file = st.file_uploader("📂 Step 2: Upload Terminal List (.txt)", type=["txt"])
+# Step 2: Upload TXT list
+uploaded_file = st.file_uploader("📂 Upload Terminal List (.txt)", type=["txt"])
 
 if uploaded_file:
     raw_text = uploaded_file.getvalue().decode("utf-8")
@@ -233,6 +237,6 @@ if 'sheets_data' in st.session_state:
     edited_df = st.data_editor(pd.DataFrame(curr_rows), num_rows="dynamic", use_container_width=True)
     st.session_state.sheets_data[sel_idx]['rows'] = edited_df.to_dict('records')
 
-    if st.button("🚀 Step 3: Generate & Download PDF", type="primary", use_container_width=True):
+    if st.button("🚀 Generate and Download PDF", type="primary", use_container_width=True):
         pdf = process_multi_sheet_pdf(st.session_state.sheets_data, sig_data)
-        st.download_button("📥 Click Here to Download", pdf, f"CTR_Output_{datetime.now().strftime('%d%m%Y')}.pdf", "application/pdf", use_container_width=True)
+        st.download_button("📥 Download Final PDF", pdf, f"CTR_Final_{datetime.now().strftime('%d%m%Y')}.pdf", "application/pdf", use_container_width=True)
