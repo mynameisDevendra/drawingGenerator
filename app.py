@@ -8,20 +8,22 @@ import io
 import os
 from datetime import datetime
 
-# --- UI CONFIG ---
+# --- UI CONFIG & DIRECTORY SETUP ---
 st.set_page_config(page_title="CTR Generator Pro", layout="wide")
 
-# Ensure the symbols directory exists locally
+# Ensure the symbols directory exists locally for the PDF generator to access
 if not os.path.exists("symbols"):
     os.makedirs("symbols")
 
-# --- SYMBOL MAPPING ---
+# --- SYMBOL LIBRARY WITH SIZE CONTROLS ---
+# You can adjust 'w' (width) and 'h' (height) here to suit your specific PNGs.
+# 18-20 width fits between terminal lines; 30+ spans across them.
 SYMBOL_LIB = {
-    "@CH": "CHARGER.png",
-    "@FS": "FUSE.png",
-    "@RY": "RELAY.png",
-    "@CK": "CHOKE (2).png",
-    "@RT": "RT.png"
+    "@CH": {"file": "CHARGER.png", "w": 30, "h": 30},
+    "@FS": {"file": "FUSE.png", "w": 18, "h": 24},
+    "@RY": {"file": "RELAY.png", "w": 28, "h": 22},
+    "@CK": {"file": "CHOKE (2).png", "w": 25, "h": 20},
+    "@RT": {"file": "RT.png", "w": 20, "h": 20}
 }
 
 # --- CONSTANTS ---
@@ -107,7 +109,6 @@ def draw_page_template(c, width, height, footer_values, sheet_num, page_heading)
         val = f"{sheet_num:02}" if i == 7 else str(footer_values[i])
         y_pos = PAGE_MARGIN + 30 if i in [4, 5, 6, 7] else PAGE_MARGIN + 5
         c.drawCentredString(x_c, y_pos, val.upper())
-            
     return info_x
 
 def process_multi_sheet_pdf(sheets_list, sig_data):
@@ -144,20 +145,38 @@ def process_multi_sheet_pdf(sheets_list, sig_data):
                 
                 for idx, t in enumerate(chunk):
                     tx = x_start + (idx * FIXED_GAP)
-                    c.setLineWidth(1); c.line(tx-3, y_curr, tx-3, y_curr+40); c.line(tx+3, y_curr, tx+3, y_curr+40)
-                    c.circle(tx, y_curr+40, 3, fill=1); c.circle(tx, y_curr, 3, fill=1)
-                    c.setFont("Helvetica-Bold", fs['term']); c.drawRightString(tx-8, y_curr+17, str(t['Terminal Number']).zfill(2))
-
-                    # SYMBOL LOGIC
                     func_text = str(t['Function']).upper().strip()
-                    for code, img_file in SYMBOL_LIB.items():
+                    
+                    # 1. Detect if a symbol code is present
+                    active_code = None
+                    for code in SYMBOL_LIB.keys():
                         if code in func_text:
-                            img_path = os.path.join("symbols", img_file)
-                            if os.path.exists(img_path):
-                                img = ImageReader(img_path)
-                                c.drawImage(img, tx-10, y_curr+10, width=20, height=20, mask='auto', preserveAspectRatio=True)
-                            t['Function'] = func_text.replace(code, "").strip()
+                            active_code = code
+                            break
+                    
+                    if active_code:
+                        # 2. Draw Symbol ONLY (Skip terminal lines/circles to avoid overlap)
+                        sym_data = SYMBOL_LIB[active_code]
+                        img_path = os.path.join("symbols", sym_data["file"])
+                        
+                        if os.path.exists(img_path):
+                            img = ImageReader(img_path)
+                            sw, sh = sym_data["w"], sym_data["h"]
+                            # Draw centered on the terminal position
+                            c.drawImage(img, tx - (sw/2), (y_curr + 20) - (sh/2), 
+                                        width=sw, height=sh, mask='auto', preserveAspectRatio=True)
+                        
+                        # Clean label for text rendering later
+                        t['Function'] = func_text.replace(active_code, "").strip()
+                    else:
+                        # 3. Draw Standard Terminal (Only if no symbol code)
+                        c.setLineWidth(1)
+                        c.line(tx-3, y_curr, tx-3, y_curr+40); c.line(tx+3, y_curr, tx+3, y_curr+40)
+                        c.circle(tx, y_curr+40, 3, fill=1); c.circle(tx, y_curr, 3, fill=1)
+                        c.setFont("Helvetica-Bold", fs['term'])
+                        c.drawRightString(tx-8, y_curr+17, str(t['Terminal Number']).zfill(2))
 
+                # Labels for Functions and Cable Details
                 for key, is_h, y_off in [('Function', True, 53.5), ('Cable Detail', False, -13.5)]:
                     i = 0
                     while i < len(chunk):
@@ -171,6 +190,7 @@ def process_multi_sheet_pdf(sheets_list, sig_data):
                         c.line(s_x-5, y_curr+y_off, s_x-5, y_curr+y_off-tick); c.line(e_x+5, y_curr+y_off, e_x+5, y_curr+y_off-tick)
                         c.setFont("Helvetica-Bold", fs['head' if is_h else 'foot'])
                         c.drawCentredString((s_x+e_x)/2, y_curr+y_off+(12 if is_h else -20), txt)
+                        
                 y_curr -= ROW_HEIGHT_SPACING
                 rows_on_page += 1
         c.showPage() 
@@ -179,24 +199,25 @@ def process_multi_sheet_pdf(sheets_list, sig_data):
 # --- UI LOGIC ---
 
 with st.sidebar:
-    st.header("📤 Upload to Symbol Library")
-    uploaded_sym = st.file_uploader("Upload PNG symbols here first", type=["png"], accept_multiple_files=True)
+    st.header("📤 Step 1: Upload Symbols")
+    # This allows you to upload your PNGs into the app's 'symbols' folder
+    uploaded_sym = st.file_uploader("Upload PNG files (CHARGER, FUSE, etc.)", type=["png"], accept_multiple_files=True)
     if uploaded_sym:
         for file in uploaded_sym:
             with open(os.path.join("symbols", file.name), "wb") as f:
                 f.write(file.getbuffer())
-        st.success(f"Uploaded {len(uploaded_sym)} symbols.")
+        st.success(f"Successfully loaded {len(uploaded_sym)} symbol(s).")
 
     st.divider()
-    st.markdown("### 🔣 Use these codes in TXT")
-    st.info("\n".join([f"**{k}** : {v}" for k, v in SYMBOL_LIB.items()]))
+    st.markdown("### 🔣 Terminal Codes")
+    st.info("\n".join([f"**{k}** : {v['file']} ({v['w']}x{v['h']})" for k, v in SYMBOL_LIB.items()]))
     
     st.divider()
-    with st.expander("✒️ Signature Names"):
+    with st.expander("✒️ Signature Details"):
         sig_data = {"prep": st.text_input("Prepared", "JE/SIG"), "chk1": st.text_input("SSE", "SSE/SIG"), 
                     "chk2": st.text_input("ASTE", "ASTE"), "app": st.text_input("DSTE", "DSTE")}
 
-st.title("🚉 CTR Generator Pro (with Symbols)")
+st.title("🚉 CTR Generator Pro (Enhanced Symbol Library)")
 
 uploaded_file = st.file_uploader("📂 Step 2: Upload Terminal List (.txt)", type=["txt"])
 
@@ -212,6 +233,6 @@ if 'sheets_data' in st.session_state:
     edited_df = st.data_editor(pd.DataFrame(curr_rows), num_rows="dynamic", use_container_width=True)
     st.session_state.sheets_data[sel_idx]['rows'] = edited_df.to_dict('records')
 
-    if st.button("🚀 Generate PDF Drawing", type="primary", use_container_width=True):
+    if st.button("🚀 Step 3: Generate & Download PDF", type="primary", use_container_width=True):
         pdf = process_multi_sheet_pdf(st.session_state.sheets_data, sig_data)
-        st.download_button("📥 Download PDF", pdf, f"CTR_{datetime.now().strftime('%d%m%Y')}.pdf", "application/pdf", use_container_width=True)
+        st.download_button("📥 Click Here to Download", pdf, f"CTR_Output_{datetime.now().strftime('%d%m%Y')}.pdf", "application/pdf", use_container_width=True)
