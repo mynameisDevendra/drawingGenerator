@@ -6,22 +6,29 @@ import re
 import io
 from datetime import datetime
 
-# --- 1. BASIC PAGE SETUP ---
-# This must be the first Streamlit command
-st.set_page_config(page_title="CTR Generator", layout="wide")
+# --- 1. FORCE SIDEBAR & LAYOUT ---
+# initial_sidebar_state="expanded" forces it to try and open
+st.set_page_config(page_title="CTR Generator", layout="wide", initial_sidebar_state="expanded")
 
-# --- 2. THE ABSOLUTE FIRST THING: UPLOAD BOX ---
-st.header("🚉 CTR Drawing Generator")
-uploaded_file = st.file_uploader("📂 UPLOAD YOUR .TXT FILE HERE", type=["txt"])
-
-# --- 3. SESSION STATE & DATA PROCESSING ---
+# --- 2. SESSION STATE ---
 if 'sheets_data' not in st.session_state:
     st.session_state.sheets_data = []
 
-# Terminal keywords including Charger and Choke
+# Keywords for Charger/Choke
 TERM_KEYWORDS = ["SPARE", "RESERVED", "NI", "E3", "TERMINAL", "BLOCK", "LINK", "RESERVE", "SP", "CHR", "CHOKE", "CHARGER"]
 
-def parse_txt(raw_text):
+# --- 3. THE INTERFACE (NO SIDEBAR REQUIRED) ---
+
+st.title("🚉 CTR Drawing Generator")
+st.info("Note: If the Side Panel is missing, look for a small '>' arrow in the top-left corner of your browser.")
+
+# --- STEP 1: UPLOAD ---
+st.subheader("📁 Step 1: Upload Data")
+uploaded_file = st.file_uploader("Upload your .txt file", type=["txt"])
+
+if uploaded_file and not st.session_state.sheets_data:
+    # Parsing logic
+    raw_text = uploaded_file.getvalue().decode("utf-8")
     sheets = []
     current_meta = {"sheet": 1, "station": "", "location": "", "sip": "", "heading": "TERMINAL CHART"}
     current_rows = []
@@ -30,7 +37,6 @@ def parse_txt(raw_text):
         line = line.strip()
         if not line: continue
         up = line.upper()
-        
         if up.startswith("SHEET:"):
             if current_rows: sheets.append({"meta": current_meta.copy(), "rows": current_rows})
             current_rows = []
@@ -39,7 +45,6 @@ def parse_txt(raw_text):
         elif up.startswith("STATION:"): current_meta["station"] = line.split(":", 1)[1].strip()
         elif up.startswith("LOCATION:"): current_meta["location"] = line.split(":", 1)[1].strip()
         elif up.startswith("SIP:"): current_meta["sip"] = line.split(":", 1)[1].strip()
-        elif up.startswith("HEADING:"): current_meta["heading"] = line.split(":", 1)[1].strip()
         else:
             parts = [p.strip() for p in line.split(',')]
             if len(parts) >= 2:
@@ -52,85 +57,54 @@ def parse_txt(raw_text):
                         current_rows.append({"Row ID": rid, "Function": f_text.strip().upper(), 
                                            "Cable Detail": cab, "Terminal Number": str(i).zfill(2)})
     if current_rows: sheets.append({"meta": current_meta, "rows": current_rows})
-    return sheets
+    st.session_state.sheets_data = sheets
 
-# --- 4. PDF ENGINE ---
-def draw_line(c, x1, x2, y, top=True):
-    c.setLineWidth(0.8)
-    c.line(x1, y, x2, y)
-    t = 5 if top else -5
-    c.line(x1, y, x1, y-t); c.line(x2, y, x2, y-t)
-
-def generate_pdf(data, sigs):
-    buffer = io.BytesIO()
-    c = canvas.Canvas(buffer, pagesize=landscape(A3))
-    w, h = landscape(A3)
-    
-    for sheet in data:
-        meta = sheet['meta']
-        df = pd.DataFrame(sheet['rows'])
-        df['sort'] = df['Terminal Number'].apply(lambda x: int(re.findall(r'\d+', str(x))[0]) if re.findall(r'\d+', str(x)) else 0)
-        df = df.sort_values(by=['Row ID', 'sort'])
-        
-        # Draw Border & Footer
-        c.rect(20, 20, w-40, h-40)
-        c.setFont("Helvetica-Bold", 16)
-        c.drawCentredString(w/2, h-60, meta['heading'].upper())
-        
-        # Basic Footer Text
-        c.setFont("Helvetica-Bold", 10)
-        c.drawString(40, 40, f"STATION: {meta['station']}  |  LOCATION: {meta['location']}  |  SIP: {meta['sip']}  |  SHEET: {meta['sheet']}")
-        c.drawRightString(w-40, 40, f"PREP: {sigs['prep']} | CHK: {sigs['chk']} | APP: {sigs['app']}")
-        
-        # Draw Rows
-        y = h - 150
-        gap = 33
-        for rid, group in df.groupby('Row ID', sort=False):
-            x = 100
-            c.setFont("Helvetica-Bold", 12)
-            c.drawString(60, y+15, rid)
-            for _, row in group.iterrows():
-                # Draw terminal circles
-                c.circle(x, y+40, 3, fill=1); c.circle(x, y, 3, fill=1)
-                c.line(x-3, y, x-3, y+40); c.line(x+3, y, x+3, y+40)
-                c.setFont("Helvetica-Bold", 8)
-                c.drawCentredString(x, y+17, row['Terminal Number'])
-                x += gap
-            y -= 100
-        c.showPage()
-    c.save()
-    buffer.seek(0)
-    return buffer
-
-# --- 5. LOGIC FLOW ---
-if uploaded_file:
-    # Only process if session state is empty
-    if not st.session_state.sheets_data:
-        raw = uploaded_file.getvalue().decode("utf-8")
-        st.session_state.sheets_data = parse_txt(raw)
-
+# --- STEP 2: SIGNATURES (ON MAIN PAGE) ---
 if st.session_state.sheets_data:
-    st.success("File Uploaded Successfully!")
-    
-    st.subheader("✍️ Signature Details")
-    c1, c2, c3 = st.columns(3)
-    sigs = {
-        "prep": c1.text_input("Prepared By", "JE/SIG"),
-        "chk": c2.text_input("Checked By", "SSE/SIG"),
-        "app": c3.text_input("Approved By", "DSTE")
+    st.divider()
+    st.subheader("✍️ Step 2: Signatures & Designations")
+    col1, col2, col3, col4 = st.columns(4)
+    sig_data = {
+        "prep": col1.text_input("Prepared By", "JE/SIG"),
+        "chk1": col2.text_input("Checked (SSE)", "SSE/SIG"),
+        "chk2": col3.text_input("Checked (ASTE)", "ASTE"),
+        "app": col4.text_input("Approved (DSTE)", "DSTE")
     }
 
-    st.subheader("📝 Edit Sheet Data")
+    # --- STEP 3: EDITING ---
+    st.divider()
+    st.subheader("📝 Step 3: Review Terminals")
     names = [f"Sheet {s['meta']['sheet']}: {s['meta']['location']}" for s in st.session_state.sheets_data]
-    idx = st.selectbox("Select Sheet", range(len(names)), format_func=lambda i: names[i])
+    sel_idx = st.selectbox("Select Sheet to View/Edit", range(len(names)), format_func=lambda i: names[i])
     
-    edited = st.data_editor(pd.DataFrame(st.session_state.sheets_data[idx]['rows']), num_rows="dynamic", use_container_width=True)
-    st.session_state.sheets_data[idx]['rows'] = edited.to_dict('records')
+    # Editable Table
+    df_editor = pd.DataFrame(st.session_state.sheets_data[sel_idx]['rows'])
+    edited_df = st.data_editor(df_editor, num_rows="dynamic", use_container_width=True, key=f"edit_{sel_idx}")
+    st.session_state.sheets_data[sel_idx]['rows'] = edited_df.to_dict('records')
 
-    if st.button("🚀 GENERATE PDF", type="primary"):
-        final_pdf = generate_pdf(st.session_state.sheets_data, sigs)
-        st.download_button("📥 DOWNLOAD NOW", final_pdf, "CTR_Drawing.pdf", "application/pdf")
+    # --- STEP 4: DOWNLOAD ---
+    st.divider()
+    if st.button("🚀 GENERATE FINAL PDF", type="primary", use_container_width=True):
+        # PDF Generation Logic (Internal)
+        buf = io.BytesIO()
+        c = canvas.Canvas(buf, pagesize=landscape(A3))
+        w, h = landscape(A3)
+        
+        for sheet in st.session_state.sheets_data:
+            m = sheet['meta']
+            c.rect(20, 20, w-40, h-40)
+            c.setFont("Helvetica-Bold", 14)
+            c.drawCentredString(w/2, h-60, f"TERMINAL CHART - {m['location']}")
+            # Simple Footer
+            c.setFont("Helvetica", 10)
+            c.drawString(40, 40, f"STATION: {m['station']} | SHEET: {m['sheet']}")
+            c.drawRightString(w-40, 40, f"PREP: {sig_data['prep']} | APP: {sig_data['app']}")
+            c.showPage()
+        
+        c.save()
+        buf.seek(0)
+        st.download_button("📥 DOWNLOAD PDF", buf, "CTR_Output.pdf", "application/pdf", use_container_width=True)
 
-    if st.button("RESET"):
+    if st.button("Reset App"):
         st.session_state.sheets_data = []
         st.rerun()
