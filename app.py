@@ -19,7 +19,7 @@ if not os.path.exists("symbols"):
 # You can adjust 'w' (width) and 'h' (height) here to suit your specific PNGs.
 # 18-20 width fits between terminal lines; 30+ spans across them.
 SYMBOL_LIB = {
-    "@CH": {"file": "CHARGER.png", "w": 30, "h": 30},
+    "@CH": {"file": "CHARGER.png", "w": 60, "h": 60},
     "@FS": {"file": "FUSE.png", "w": 18, "h": 24},
     "@RY": {"file": "RELAY.png", "w": 28, "h": 22},
     "@CK": {"file": "CHOKE (2).png", "w": 25, "h": 20},
