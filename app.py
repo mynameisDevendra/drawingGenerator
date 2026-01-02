@@ -11,27 +11,12 @@ from datetime import datetime
 # --- UI CONFIG & DIRECTORY SETUP ---
 st.set_page_config(page_title="CTR Generator Pro", layout="wide")
 
+# Ensure the symbols directory exists locally
 if not os.path.exists("symbols"):
     os.makedirs("symbols")
 
-# --- CONSTANTS & SAMPLE ---
-PAGE_MARGIN = 20
-SAFETY_OFFSET = 42.5
-FIXED_GAP = 33
-PAGE_SIZE = landscape(A3)
-ROW_HEIGHT_SPACING = 105 
-
-SAMPLE_CONTENT = """HEADING: CTR WITH SYMBOLS SAMPLE
-STATION: KUR
-SIP: SIP/KUR/2026/01
-
-SHEET: 01
-LOCATION: GTY-01
-A, 110V AC @CH [01 to 01], @SP [02 to 02], 24V DC @FS [03 to 03], 24C RR to GTY-01
-B, TRACK RELAY @RY [01 to 02], @SP [03 to 03], CHOKE @CK [04 to 04], 12C GTY-01 to LOC-02
-"""
-
-# --- SYMBOL LIBRARY ---
+# --- SYMBOL LIBRARY WITH SIZE & SPACE CONTROLS ---
+# Custom sizing per symbol to ensure professional alignment
 SYMBOL_LIB = {
     "@CH": {"file": "CHARGER.png", "w": 30, "h": 30, "desc": "Charger Symbol"},
     "@FS": {"file": "FUSE.png", "w": 18, "h": 24, "desc": "Fuse Symbol"},
@@ -40,6 +25,39 @@ SYMBOL_LIB = {
     "@RT": {"file": "RT.png", "w": 20, "h": 20, "desc": "RT Symbol"},
     "@SP": {"file": None, "w": 0, "h": 0, "desc": "Blank Space Gap"}
 }
+
+# --- CONSTANTS ---
+PAGE_MARGIN = 20
+SAFETY_OFFSET = 42.5
+FIXED_GAP = 33
+PAGE_SIZE = landscape(A3)
+ROW_HEIGHT_SPACING = 105 
+
+# --- UPDATED SAMPLE FILE CONTENT  ---
+SAMPLE_CONTENT = """SHEET: 15
+HEADING: MAIN PAGE TITLE
+STATION: STATION NAME
+LOCATION: LOCATION BOX NO 3
+SIP: SIP 123
+
+A, HR[1 TO 4], CHARGER[5 TO 9], SP[10 TO 28], B24 @FS [29 TO 29], N24[30 TO 30], 30C RR TO GOOMTY1
+B, HHR[1 TO 4], DPR[5 TO 8], SP[9 TO 30], 30C RR TO GOOMTY2
+C, NWKR[1 TO 2], RWKR[3 TO 4], SP[5 TO 8], NW[9 TO 10], RW[11 TO 12], SP[13 TO 24], 24C RR TO GOOMTY3
+C, TPR[25 TO 26], SP[27 TO 30], 6C TO GOOMTY3
+D, 110V AC @CH [01 to 01], @SP[02 TO 5], 110V AC @CK [06 to 06]
+E, SP[1 TO 30]
+F, SP[1 TO 30]
+G, SP[1 TO 30]
+
+SHEET: 55
+HEADING: MAIN PAGE TITLE
+STATION: STATION NAME
+LOCATION: LOCATION BOX NO 4
+SIP: SIP 123
+
+A, HR[1 TO 4], DR[5 TO 8], SP[9 TO 30], 30C RR TO GOOMTY1
+B, HHR[1 TO 4], DPR[5 TO 8], SP[9 TO 30], 30C RR TO GOOMTY2
+C, NWKR[1 TO 2], RWKR[3 TO 4], SP[5 TO 30], 24C RR TO GOOMTY3"""
 
 # --- CORE FUNCTIONS ---
 
@@ -77,7 +95,7 @@ def parse_multi_sheet_txt(raw_text):
                 is_cable = not any(key in last_part for key in term_keywords)
                 cable_detail = last_part if (is_cable and len(parts) >= 3) else ""
                 
-                pattern = r'([^,\[]+)\[\s*(\d+)\s+to\s+(\d+)\s*\]'
+                pattern = r'([^,\[]+)\[\s*(\d+)\s+TO\s+(\d+)\s*\]'
                 matches = re.findall(pattern, middle_part, re.I)
                 for match in matches:
                     func_text = match[0].strip().upper()
@@ -151,7 +169,7 @@ def process_multi_sheet_pdf(sheets_list, sig_data):
                 x_start = info_x + SAFETY_OFFSET + 20
                 c.setFont("Helvetica-Bold", fs['row']); c.drawRightString(x_start - 30, y_curr + 15, str(rid))
                 
-                # Pre-process chunk to mark symbol positions
+                # Pre-mark symbol positions for selective text rendering
                 has_symbol = [any(code in str(t['Function']).upper() for code in SYMBOL_LIB.keys()) for t in chunk]
 
                 for idx, t in enumerate(chunk):
@@ -162,6 +180,7 @@ def process_multi_sheet_pdf(sheets_list, sig_data):
                     if active_code == "@SP":
                         t['Function'] = func_text.replace("@SP", "").strip()
                     elif active_code:
+                        # Draw symbol and hide standard graphics
                         sym_data = SYMBOL_LIB[active_code]
                         img_path = os.path.join("symbols", sym_data["file"])
                         if os.path.exists(img_path):
@@ -170,16 +189,17 @@ def process_multi_sheet_pdf(sheets_list, sig_data):
                             c.drawImage(img, tx - (sw/2), (y_curr + 20) - (sh/2), width=sw, height=sh, mask='auto', preserveAspectRatio=True)
                         t['Function'] = func_text.replace(active_code, "").strip()
                     else:
+                        # Standard terminal rendering
                         c.setLineWidth(1)
                         c.line(tx-3, y_curr, tx-3, y_curr+40); c.line(tx+3, y_curr, tx+3, y_curr+40)
                         c.circle(tx, y_curr+40, 3, fill=1); c.circle(tx, y_curr, 3, fill=1)
                         c.setFont("Helvetica-Bold", fs['term'])
                         c.drawRightString(tx-8, y_curr+17, str(t['Terminal Number']).zfill(2))
 
+                # Labels: Hide Cable Detail if symbol is detected
                 for key, is_h, y_off in [('Function', True, 53.5), ('Cable Detail', False, -13.5)]:
                     i = 0
                     while i < len(chunk):
-                        # Skip Cable Detail text if a Symbol is present in that slot
                         if not is_h and has_symbol[i]: 
                             i += 1
                             continue
@@ -211,6 +231,12 @@ def process_multi_sheet_pdf(sheets_list, sig_data):
 
 with st.sidebar:
     st.header("📂 Resources")
+    
+    # Collapsible Keyword Legend
+    with st.expander("🔣 Keyword Legend", expanded=False):
+        for k, v in SYMBOL_LIB.items():
+            st.write(f"**{k}** : {v['desc']}")
+
     # Collapsible Symbol Management
     with st.expander("📤 Symbol Library Management", expanded=False):
         uploaded_sym = st.file_uploader("Upload PNG library files", type=["png"], accept_multiple_files=True)
@@ -218,22 +244,19 @@ with st.sidebar:
             for file in uploaded_sym:
                 with open(os.path.join("symbols", file.name), "wb") as f:
                     f.write(file.getbuffer())
-            st.success(f"Loaded {len(uploaded_sym)} symbols.")
+            st.success(f"Loaded {len(uploaded_sym)} images.")
 
-    # Collapsible Keyword Legend
-    with st.expander("🔣 Available Keywords", expanded=False):
-        for k, v in SYMBOL_LIB.items():
-            st.write(f"**{k}** : {v['desc']}")
-
-    st.download_button("📥 Download Sample TXT", SAMPLE_CONTENT, "sample_ctr_symbols.txt", "text/plain", use_container_width=True)
+    # Download Button for your NEW Sample Content 
+    st.download_button("📥 Download Sample TXT", SAMPLE_CONTENT, "sample_ctr_final.txt", "text/plain", use_container_width=True)
     
     st.divider()
     with st.expander("✒️ Signature Details"):
         sig_data = {"prep": st.text_input("Prepared", "JE/SIG"), "chk1": st.text_input("SSE", "SSE/SIG"), 
                     "chk2": st.text_input("ASTE", "ASTE"), "app": st.text_input("DSTE", "DSTE")}
 
-st.title("🚉 CTR Generator Pro (Complete UI Revision)")
+st.title("🚉 CTR Generator Pro")
 
+# Step 1: Upload TXT
 uploaded_file = st.file_uploader("📂 Step 1: Upload Terminal List (.txt)", type=["txt"])
 
 if uploaded_file:
