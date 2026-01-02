@@ -18,7 +18,7 @@ PAGE_SIZE = landscape(A3)
 
 TERMINAL_HEIGHT = 40
 ROW_HEIGHT_SPACING = 105
-BLOCK_SYMBOL_HEIGHT = TERMINAL_HEIGHT * 2   # DOUBLE height
+BLOCK_SYMBOL_HEIGHT = TERMINAL_HEIGHT * 2
 
 # ================= SAMPLE =================
 SAMPLE_CONTENT = """HEADING: SAMPLE TERMINAL CHART
@@ -127,12 +127,12 @@ def process_multi_sheet_pdf(sheets, symbol_images):
         draw_page(c, w, h, sheet["meta"]["heading"])
 
         info_x = PAGE_MARGIN + ((w - 2 * PAGE_MARGIN) / 15)
-        term_per_row = int((w - info_x - SAFETY_OFFSET - 60) // FIXED_GAP)
+        term_per_row = max(1, int((w - info_x - SAFETY_OFFSET - 60) // FIXED_GAP))
 
         y = h - 160
         rows_used = 0
 
-        # -------- BLOCKED TERMINALS --------
+        # ---- BLOCKED TERMINALS ----
         blocked = set()
         for s in sheet["symbols"]:
             for t in range(int(s["start"]), int(s["end"]) + 1):
@@ -153,9 +153,9 @@ def process_multi_sheet_pdf(sheets, symbol_images):
                 c.drawRightString(x0 - 30, y + 15, rid)
 
                 # ---- DRAW TERMINALS ----
-                for i, r in enumerate(chunk.itertuples()):
-                    tno = r.Terminal_Number
-                    tx = x0 + i * FIXED_GAP
+                for idx in range(len(chunk)):
+                    tno = chunk.iloc[idx]["Terminal Number"]
+                    tx = x0 + idx * FIXED_GAP
 
                     if (rid, tno) not in blocked:
                         c.line(tx - 3, y, tx - 3, y + TERMINAL_HEIGHT)
@@ -169,16 +169,17 @@ def process_multi_sheet_pdf(sheets, symbol_images):
                 for s in sheet["symbols"]:
                     if s["row"] != rid:
                         continue
+
                     start = int(s["start"])
                     end = int(s["end"])
-                    first = chunk.iloc[0]["Terminal Number"]
-                    last = chunk.iloc[-1]["Terminal Number"]
+                    first = int(chunk.iloc[0]["Terminal Number"])
+                    last = int(chunk.iloc[-1]["Terminal Number"])
 
-                    if start < int(first) or end > int(last):
+                    if start < first or end > last:
                         continue
 
-                    x1 = x0 + (start - int(first)) * FIXED_GAP - FIXED_GAP / 2
-                    x2 = x0 + (end - int(first)) * FIXED_GAP + FIXED_GAP / 2
+                    x1 = x0 + (start - first) * FIXED_GAP - FIXED_GAP / 2
+                    x2 = x0 + (end - first) * FIXED_GAP + FIXED_GAP / 2
 
                     img = symbol_images.get(s["symbol"])
                     if img:
