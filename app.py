@@ -12,12 +12,12 @@ st.set_page_config(page_title="CTR Drawing Generator", layout="wide")
 
 PAGE_MARGIN = 20
 SAFETY_OFFSET = 42.5
-FIXED_GAP = 33
+FIXED_GAP = 45 # Increased gap to allow space for numbers on the left
 PAGE_SIZE = landscape(A3)
-ROW_HEIGHT_SPACING = 140  # Increased vertical space between Row A, Row B, etc.
+ROW_HEIGHT_SPACING = 150 
 TERMINAL_BOX_HEIGHT = 30
-CABLE_LABEL_Y = 55        # Height of cable name above the terminal base
-CABLE_BAR_Y = 50          # Height of the horizontal grouping bar
+CABLE_LABEL_Y = 65        
+CABLE_BAR_Y = 60          
 
 # --- FUNCTIONS ---
 
@@ -97,13 +97,14 @@ def generate_pdf(sheets_list, symbol_images):
         info_x = PAGE_MARGIN + ((width - (2 * PAGE_MARGIN)) / 15)
         
         for rid, group in df.groupby('Row ID', sort=False):
-            x_start = info_x + SAFETY_OFFSET + 20
+            # Shift starting point slightly right to account for the first terminal's left-side number
+            x_start = info_x + SAFETY_OFFSET + 40 
             c.setFont("Helvetica-Bold", 12)
-            c.drawRightString(x_start - 35, y_curr + 10, str(rid))
+            c.drawRightString(x_start - 50, y_curr + 10, str(rid))
             
             chunk = group.to_dict('records')
             
-            # --- 1. DRAW CABLE GROUPS FIRST (Top Layer) ---
+            # --- 1. DRAW CABLE GROUPS (Lables & Bar) ---
             groups = []
             if chunk:
                 curr_g = {"name": chunk[0]['cable_name'], "start": 0, "count": 1}
@@ -120,37 +121,34 @@ def generate_pdf(sheets_list, symbol_images):
                     lx_start = x_start + (g['start'] * FIXED_GAP)
                     lx_end = lx_start + ((g['count'] - 1) * FIXED_GAP)
                     c.setLineWidth(0.8)
-                    # Horizontal bar
-                    c.line(lx_start - 8, y_curr + CABLE_BAR_Y, lx_end + 8, y_curr + CABLE_BAR_Y)
-                    # Vertical ticks
-                    c.line(lx_start - 8, y_curr + CABLE_BAR_Y, lx_start - 8, y_curr + CABLE_BAR_Y - 10)
-                    c.line(lx_end + 8, y_curr + CABLE_BAR_Y, lx_end + 8, y_curr + CABLE_BAR_Y - 10)
-                    # Cable Text
-                    c.setFont("Helvetica-BoldOblique", 7)
+                    c.line(lx_start - 5, y_curr + CABLE_BAR_Y, lx_end + 5, y_curr + CABLE_BAR_Y)
+                    c.line(lx_start - 5, y_curr + CABLE_BAR_Y, lx_start - 5, y_curr + CABLE_BAR_Y - 8)
+                    c.line(lx_end + 5, y_curr + CABLE_BAR_Y, lx_end + 5, y_curr + CABLE_BAR_Y - 8)
+                    
+                    c.setFont("Helvetica-BoldOblique", 8)
                     c.drawCentredString((lx_start + lx_end)/2, y_curr + CABLE_LABEL_Y, g['name'])
 
-            # --- 2. DRAW TERMINALS ---
+            # --- 2. DRAW TERMINALS & NUMBERS ---
             for idx, t in enumerate(chunk):
                 tx = x_start + (idx * FIXED_GAP)
                 
+                # Terminal Number printed to the LEFT of the terminal
+                c.setFont("Helvetica", 9)
+                c.drawRightString(tx - 8, y_curr + (TERMINAL_BOX_HEIGHT / 2) - 3, t['Terminal Number'])
+
                 if t.get('is_symbol'):
                     name = t['Function']
                     if name in symbol_images:
-                        # Adjusted symbol height to not clash with cable bar
-                        c.drawImage(symbol_images[name], tx-12, y_curr+2, width=24, height=26, mask='auto')
-                    c.setFont("Helvetica-Bold", 8)
+                        c.drawImage(symbol_images[name], tx-10, y_curr+2, width=20, height=26, mask='auto')
+                    c.setFont("Helvetica-Bold", 7)
                     c.drawCentredString(tx, y_curr + 35, name)
                 else:
-                    # Terminal Body
+                    # Terminal Body (The two vertical lines)
                     c.setLineWidth(1)
-                    c.line(tx-4, y_curr, tx-4, y_curr + TERMINAL_BOX_HEIGHT)
-                    c.line(tx+4, y_curr, tx+4, y_curr + TERMINAL_BOX_HEIGHT)
-                    c.circle(tx, y_curr + TERMINAL_BOX_HEIGHT, 2, fill=1)
-                    c.circle(tx, y_curr, 2, fill=1)
-                    
-                    # Terminal Number (Centered exactly between the circles)
-                    c.setFont("Helvetica", 8)
-                    c.drawCentredString(tx, y_curr + (TERMINAL_BOX_HEIGHT / 2) - 3, t['Terminal Number'])
+                    c.line(tx-3, y_curr, tx-3, y_curr + TERMINAL_BOX_HEIGHT)
+                    c.line(tx+3, y_curr, tx+3, y_curr + TERMINAL_BOX_HEIGHT)
+                    c.circle(tx, y_curr + TERMINAL_BOX_HEIGHT, 1.5, fill=1)
+                    c.circle(tx, y_curr, 1.5, fill=1)
             
             y_curr -= ROW_HEIGHT_SPACING
         c.showPage()
@@ -159,10 +157,9 @@ def generate_pdf(sheets_list, symbol_images):
     return buffer
 
 # --- UI ---
-st.sidebar.header("🎨 Symbol Assets")
+st.sidebar.header("🎨 Assets")
 symbols_list = ["CHARGER", "CHOKE", "FUSE", "RELAY", "RESISTANCE"]
 sym_images = {}
-
 for s in symbols_list:
     f = st.sidebar.file_uploader(f"Icon: {s}", type=["png", "jpg"], key=s)
     if f: sym_images[s] = Image.open(f)
@@ -177,9 +174,4 @@ if uploaded_file:
     if data:
         if st.button("🚀 Generate PDF Drawing"):
             pdf_out = generate_pdf(data, sym_images)
-            st.download_button(
-                label="📥 Download CTR Drawing",
-                data=pdf_out,
-                file_name="CTR_Drawing.pdf",
-                mime="application/pdf"
-            )
+            st.download_button("📥 Download PDF", data=pdf_out, file_name="CTR_Drawing.pdf", mime="application/pdf")
